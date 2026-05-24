@@ -1157,6 +1157,7 @@ function abreviarNome($nomeCompleto) {
                     
                     <p class="text-stone-500 text-xs">
                         Você já entregou <span id="updateQtdAtualLabel" class="font-bold text-stone-900">0</span> de <span id="updateQtdMaxLabel" class="font-bold text-stone-900">0</span> peças.
+                        <br>Faltam: <span id="updateQtdFaltaLabel" class="font-bold text-rose-600">0</span> peças.
                     </p>
 
                     <div>
@@ -1173,7 +1174,10 @@ function abreviarNome($nomeCompleto) {
                     <div>
                         <label class="block text-xs font-bold text-stone-400 uppercase mb-1">Valor recebido agora (R$)</label>
                         <input type="number" step="0.01" name="valor_recebido_agora" id="updateValorRecebidoAgora" placeholder="0,00" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
-                        <p class="text-[10px] text-stone-400 mt-1">Total já recebido anteriormente: <span id="updateValorRecebidoLabel" class="font-bold">R$ 0,00</span></p>
+                        <p class="text-[10px] text-stone-400 mt-1">
+                            Recebido: <span id="updateValorRecebidoLabel" class="font-bold">R$ 0,00</span>
+                            / Falta: <span id="updateValorPendenteLabel" class="font-bold text-rose-500">R$ 0,00</span>
+                        </p>
                     </div>
 
                     <button type="submit" class="w-full bg-stone-950 hover:bg-stone-850 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer">
@@ -1244,10 +1248,13 @@ function abreviarNome($nomeCompleto) {
         let entreguesAtualmente = 0;
         let valorRecebidoAtualmente = 0;
 
-        function openUpdateQtd(id, currentQtd, maxQtd, collection, valorRecebido) {
+        function openUpdateQtd(id, currentQtd, maxQtd, collection, valorRecebido, precoUnitario) {
             maxLoteAtual = maxQtd;
             entreguesAtualmente = currentQtd;
             valorRecebidoAtualmente = parseFloat(valorRecebido || 0);
+            const preco = parseFloat(precoUnitario || 0);
+            const valorTotalLote = maxQtd * preco;
+            const valorPendente = Math.max(0, valorTotalLote - valorRecebidoAtualmente);
 
             document.getElementById('updateQtdId').value = id;
             document.getElementById('updateQtdCollection').value = collection || 'remessas';
@@ -1256,23 +1263,42 @@ function abreviarNome($nomeCompleto) {
             
             document.getElementById('updateQtdAtualLabel').innerText = currentQtd;
             document.getElementById('updateQtdMaxLabel').innerText = maxQtd;
+            
+            const faltaPecas = maxQtd - currentQtd;
+            document.getElementById('updateQtdFaltaLabel').innerText = faltaPecas;
+            
             document.getElementById('updateValorRecebidoLabel').innerText = 'R$ ' + valorRecebidoAtualmente.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            document.getElementById('updateValorPendenteLabel').innerText = 'R$ ' + valorPendente.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
             
             // Sugere adicionar o que falta por padrão, ou pelo menos 1
-            const falta = maxQtd - currentQtd;
-            document.getElementById('updateQtdAdicionar').value = falta > 0 ? 1 : 0;
-            document.getElementById('updateQtdAdicionar').setAttribute('max', falta);
+            document.getElementById('updateQtdAdicionar').value = faltaPecas > 0 ? 1 : 0;
             document.getElementById('updateValorRecebidoAgora').value = ''; // Limpa campo de valor
             
             toggleModal('modalUpdateQtd');
         }
 
-        function openUpdatePagamento(id, valorRecebido, collection) {
+        function openUpdatePagamento(id, valorRecebido, collection, maxQtd, precoUnitario) {
             const val = parseFloat(valorRecebido || 0);
+            const preco = parseFloat(precoUnitario || 0);
+            const total = parseInt(maxQtd || 0) * preco;
+            const pendente = Math.max(0, total - val);
+
             document.getElementById('updatePagId').value = id;
             document.getElementById('updatePagCollection').value = collection || 'remessas';
             document.getElementById('updatePagAtualHidden').value = val;
             document.getElementById('updatePagLabel').innerText = 'R$ ' + val.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            
+            // Adiciona label de falta no modal de pagamento se não existir
+            let pendenteEl = document.getElementById('updatePagPendenteLabel');
+            if (!pendenteEl) {
+                const p = document.createElement('p');
+                p.className = 'text-[10px] text-stone-400 mt-0.5';
+                p.innerHTML = 'Falta: <span id="updatePagPendenteLabel" class="font-bold text-rose-500">R$ 0,00</span> (Total: ' + formatReal(total) + ')';
+                document.getElementById('updatePagLabel').parentNode.appendChild(p);
+                pendenteEl = document.getElementById('updatePagPendenteLabel');
+            }
+            pendenteEl.innerText = 'R$ ' + pendente.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
             toggleModal('modalUpdatePagamento');
         }
 
