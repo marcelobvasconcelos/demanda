@@ -120,6 +120,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         $qtdAdicionar = intval($_POST['qtd_adicionar'] ?? 0);
         $qtdAtual = intval($_POST['qtd_atual'] ?? 0);
         $qtdTotal = $qtdAtual + $qtdAdicionar;
+        
+        $valorRecebidoAgora = floatval($_POST['valor_recebido_agora'] ?? 0);
+        $valorRecebidoAtual = floatval($_POST['valor_recebido_atual'] ?? 0);
+        $valorRecebidoTotal = $valorRecebidoAtual + $valorRecebidoAgora;
+
         $usuarioUid = $_SESSION['firebase_localId'] ?? firestore_get_user_uid_by_email($_SESSION['usuario_email'] ?? '');
 
         if ($docId === '' || $collection === '') {
@@ -129,8 +134,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         } else {
             try {
                 $dataUltimaEntrega = $qtdTotal > 0 ? date('Y-m-d') : null;
-                firestore_update_remessa_entrega($docId, $qtdTotal, $dataUltimaEntrega, $collection);
+                firestore_update_remessa_entrega($docId, $qtdTotal, $dataUltimaEntrega, $collection, $valorRecebidoTotal);
+                
                 $msgSuccess = 'Entrega registrada com sucesso! +' . $qtdAdicionar . ' peças.';
+                if ($valorRecebidoAgora > 0) {
+                    $msgSuccess .= ' Recebido: ' . formatReal($valorRecebidoAgora);
+                }
             } catch (Throwable $e) {
                 $msgError = 'Erro ao atualizar remessa no Firestore: ' . $e->getMessage();
             }
@@ -241,7 +250,7 @@ if ($dbConnected && $pdo && $activeTab === 'dashboard') {
 // ABA 2: Buscar Dados das Remessas do Mês
 // ----------------------------------------------------
 $remessas = [];
-$statsRemessas = ['valor_total' => 0.0, 'pecas_totais' => 0, 'pecas_entregues' => 0];
+$statsRemessas = ['valor_total' => 0.0, 'pecas_totais' => 0, 'pecas_entregues' => 0, 'valor_recebido' => 0.0, 'valor_pendente' => 0.0];
 
 if ($activeTab === 'remessas' && $firestoreEnabled) {
     $usuarioEmail = $_SESSION['usuario_email'] ?? '';
@@ -259,12 +268,15 @@ if ($activeTab === 'remessas' && $firestoreEnabled) {
     foreach ($remessas as $remessa) {
         $quantidade = max(0, intval($remessa['quantidade'] ?? 0));
         $qtdEntregue = max(0, min(intval($remessa['qtd_entregue'] ?? 0), $quantidade));
-        $statsRemessas['valor_total'] += isset($remessa['total'])
-            ? floatval($remessa['total'])
-            : $quantidade * floatval($remessa['preco_unitario'] ?? 0);
+        $valorLote = $quantidade * floatval($remessa['preco_unitario'] ?? 0);
+        $valorRecebido = floatval($remessa['valor_recebido'] ?? 0);
+
+        $statsRemessas['valor_total'] += $valorLote;
         $statsRemessas['pecas_totais'] += $quantidade;
         $statsRemessas['pecas_entregues'] += $qtdEntregue;
+        $statsRemessas['valor_recebido'] += $valorRecebido;
     }
+    $statsRemessas['valor_pendente'] = $statsRemessas['valor_total'] - $statsRemessas['valor_recebido'];
 }
 
 // Utilitários de Data e Nomes
@@ -536,7 +548,7 @@ function abreviarNome($nomeCompleto) {
                                                 </button>
                                             <?php else: ?>
                                                 <!-- Abre atualização de quantidade entregue -->
-                                                <button onclick="openUpdateQtd(<?php echo htmlspecialchars(json_encode($remessa['id']), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['qtd_entregue']; ?>, <?php echo $remessa['quantidade']; ?>, <?php echo htmlspecialchars(json_encode($remessa['__collection'] ?? 'remessas'), ENT_QUOTES, 'UTF-8'); ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 hover:border-stone-900 bg-white flex items-center justify-center text-stone-500 hover:text-stone-900 transition-colors cursor-pointer" title="Registrar Entregas">
+                                                <button onclick="openUpdateQtd(<?php echo htmlspecialchars(json_encode($remessa['id']), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['qtd_entregue']; ?>, <?php echo $remessa['quantidade']; ?>, <?php echo htmlspecialchars(json_encode($remessa['__collection'] ?? 'remessas'), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['valor_recebido']; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 hover:border-stone-900 bg-white flex items-center justify-center text-stone-500 hover:text-stone-900 transition-colors cursor-pointer" title="Registrar Entregas">
                                                     <span class="text-xs font-bold">+</span>
                                                 </button>
                                             <?php endif; ?>
@@ -558,19 +570,38 @@ function abreviarNome($nomeCompleto) {
                                         </div>
                                     </div>
 
-                                    <!-- Linha Intermediária: Tamanho -->
-                                    <div class="flex items-center gap-2 mb-4">
-                                        <span class="text-xs font-semibold text-stone-400 uppercase">Tamanho:</span>
-                                        <span class="w-6.5 h-6.5 rounded-full border border-stone-300 flex items-center justify-center text-xs font-bold text-stone-800 bg-stone-50">
-                                            <?php echo htmlspecialchars($remessa['tamanho']); ?>
-                                        </span>
-                                        
-                                        <?php if (!empty($remessa['loja_nome'])): ?>
-                                            <span class="inline-flex items-center gap-1 bg-stone-100 text-stone-700 px-2 py-0.5 rounded-md text-[10px] font-medium border border-stone-200/50">
-                                                <i data-lucide="store" class="w-2.5 h-2.5"></i>
-                                                <?php echo htmlspecialchars($remessa['loja_nome']); ?>
+                                    <!-- Linha Intermediária: Tamanho & Financeiro Rápido -->
+                                    <div class="flex items-center justify-between mb-4">
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-xs font-semibold text-stone-400 uppercase">Tamanho:</span>
+                                            <span class="w-6.5 h-6.5 rounded-full border border-stone-300 flex items-center justify-center text-xs font-bold text-stone-800 bg-stone-50">
+                                                <?php echo htmlspecialchars($remessa['tamanho']); ?>
                                             </span>
-                                        <?php endif; ?>
+                                            
+                                            <?php if (!empty($remessa['loja_nome'])): ?>
+                                                <span class="inline-flex items-center gap-1 bg-stone-100 text-stone-700 px-2 py-0.5 rounded-md text-[10px] font-medium border border-stone-200/50">
+                                                    <i data-lucide="store" class="w-2.5 h-2.5"></i>
+                                                    <?php echo htmlspecialchars($remessa['loja_nome']); ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <!-- Resumo Financeiro no Card -->
+                                        <div class="text-right">
+                                            <?php 
+                                                $totalLote = $remessa['quantidade'] * $remessa['preco_unitario'];
+                                                $recebido = $remessa['valor_recebido'] ?? 0;
+                                                $pendente = $totalLote - $recebido;
+                                            ?>
+                                            <div class="text-[10px] font-bold text-emerald-600 uppercase leading-none">Recebido: <?php echo formatReal($recebido); ?></div>
+                                            <?php if ($pendente > 0): ?>
+                                                <div class="text-[10px] font-bold text-rose-500 uppercase mt-0.5">Falta: <?php echo formatReal($pendente); ?></div>
+                                            <?php else: ?>
+                                                <div class="text-[10px] font-bold text-emerald-500 uppercase mt-0.5 flex items-center justify-end gap-1">
+                                                    <i data-lucide="check" class="w-2.5 h-2.5"></i> Pago
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
                                     </div>
 
                                     <!-- Informações Adicionais (VÊ MAIS escondido por padrão) -->
@@ -581,7 +612,7 @@ function abreviarNome($nomeCompleto) {
                                         </div>
                                         <div class="flex justify-between">
                                             <span>Valor Total do Lote:</span>
-                                            <span class="font-bold text-stone-800"><?php echo formatReal($remessa['quantidade'] * $remessa['preco_unitario']); ?></span>
+                                            <span class="font-bold text-stone-800"><?php echo formatReal($totalLote); ?></span>
                                         </div>
                                         <div class="flex justify-between">
                                             <span>Data de Lançamento:</span>
@@ -618,31 +649,48 @@ function abreviarNome($nomeCompleto) {
             </section>
 
             <!-- Rodapé Financeiro e Operacional Consolidado -->
-            <section class="bg-stone-900 border border-stone-950 rounded-3xl p-6 text-white grid grid-cols-1 md:grid-cols-2 gap-6 shadow-md">
-                <!-- Total Faturado -->
+            <section class="bg-stone-900 border border-stone-950 rounded-3xl p-6 text-white grid grid-cols-1 md:grid-cols-3 gap-6 shadow-md">
+                <!-- Total das Remessas -->
                 <div class="flex items-center gap-4 border-b md:border-b-0 md:border-r border-stone-800 pb-4 md:pb-0 pr-4">
-                    <div class="w-12 h-12 bg-stone-800 text-atelier-brand rounded-2xl flex items-center justify-center">
-                        <i data-lucide="circle-dollar-sign" class="w-6 h-6"></i>
+                    <div class="w-10 h-10 bg-stone-800 text-stone-400 rounded-xl flex items-center justify-center">
+                        <i data-lucide="circle-dollar-sign" class="w-5 h-5"></i>
                     </div>
                     <div>
-                        <span class="text-[10px] text-stone-400 tracking-wider uppercase font-bold">Valor Total das Remessas</span>
-                        <h3 class="text-3xl font-serif font-bold text-white tracking-tight mt-0.5"><?php echo formatReal($statsRemessas['valor_total']); ?></h3>
+                        <span class="text-[9px] text-stone-400 tracking-wider uppercase font-bold">Valor Total Bruto</span>
+                        <h3 class="text-xl font-serif font-bold text-white tracking-tight"><?php echo formatReal($statsRemessas['valor_total']); ?></h3>
                     </div>
                 </div>
 
-                <!-- Peças Entregues / Consolidado -->
-                <div class="flex items-center gap-4">
-                    <div class="w-12 h-12 bg-stone-800 text-atelier-brand rounded-2xl flex items-center justify-center">
-                        <i data-lucide="package" class="w-6 h-6"></i>
+                <!-- Total Recebido -->
+                <div class="flex items-center gap-4 border-b md:border-b-0 md:border-r border-stone-800 pb-4 md:pb-0 pr-4">
+                    <div class="w-10 h-10 bg-stone-800 text-emerald-500 rounded-xl flex items-center justify-center">
+                        <i data-lucide="wallet" class="w-5 h-5"></i>
                     </div>
                     <div>
-                        <span class="text-[10px] text-stone-400 tracking-wider uppercase font-bold">Consolidado de Entregas</span>
-                        <h3 class="text-3xl font-serif font-bold text-white tracking-tight mt-0.5">
-                            <?php echo $statsRemessas['pecas_entregues']; ?> <span class="text-sm font-normal text-stone-400">de <?php echo $statsRemessas['pecas_totais']; ?> peças</span>
-                        </h3>
+                        <span class="text-[9px] text-stone-400 tracking-wider uppercase font-bold">Total Recebido</span>
+                        <h3 class="text-xl font-serif font-bold text-emerald-400 tracking-tight"><?php echo formatReal($statsRemessas['valor_recebido']); ?></h3>
+                    </div>
+                </div>
+
+                <!-- Total Pendente -->
+                <div class="flex items-center gap-4">
+                    <div class="w-10 h-10 bg-stone-800 text-rose-500 rounded-xl flex items-center justify-center">
+                        <i data-lucide="hand-coins" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <span class="text-[9px] text-stone-400 tracking-wider uppercase font-bold">Saldo a Receber</span>
+                        <h3 class="text-xl font-serif font-bold text-rose-400 tracking-tight"><?php echo formatReal($statsRemessas['valor_pendente']); ?></h3>
                     </div>
                 </div>
             </section>
+
+            <!-- Consolidado de Peças (Mini Badge abaixo do financeiro) -->
+            <div class="mt-4 flex justify-center">
+                <div class="bg-stone-200 text-stone-700 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-2">
+                    <i data-lucide="package" class="w-3 h-3"></i>
+                    Entregas: <?php echo $statsRemessas['pecas_entregues']; ?> de <?php echo $statsRemessas['pecas_totais']; ?> peças concluídas
+                </div>
+            </div>
 
         <!-- ================================================================= -->
         <!-- ABA 2: DASHBOARD GERAL & FINANCEIRO (BÁSICO APROVADO)            -->
@@ -1043,6 +1091,7 @@ function abreviarNome($nomeCompleto) {
                     <input type="hidden" name="id" id="updateQtdId">
                     <input type="hidden" name="collection" id="updateQtdCollection">
                     <input type="hidden" name="qtd_atual" id="updateQtdAtualHidden">
+                    <input type="hidden" name="valor_recebido_atual" id="updateValorRecebidoAtualHidden">
                     
                     <p class="text-stone-500 text-xs">
                         Você já entregou <span id="updateQtdAtualLabel" class="font-bold text-stone-900">0</span> de <span id="updateQtdMaxLabel" class="font-bold text-stone-900">0</span> peças.
@@ -1057,6 +1106,12 @@ function abreviarNome($nomeCompleto) {
                                 Restante
                             </button>
                         </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-stone-400 uppercase mb-1">Valor recebido agora (R$)</label>
+                        <input type="number" step="0.01" name="valor_recebido_agora" id="updateValorRecebidoAgora" placeholder="0,00" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
+                        <p class="text-[10px] text-stone-400 mt-1">Total já recebido anteriormente: <span id="updateValorRecebidoLabel" class="font-bold">R$ 0,00</span></p>
                     </div>
 
                     <button type="submit" class="w-full bg-stone-950 hover:bg-stone-850 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer">
@@ -1089,25 +1144,29 @@ function abreviarNome($nomeCompleto) {
             }
         }
 
-        // Abre o modal de registrar entrega e define os limites
         let maxLoteAtual = 0;
         let entreguesAtualmente = 0;
+        let valorRecebidoAtualmente = 0;
 
-        function openUpdateQtd(id, currentQtd, maxQtd, collection) {
+        function openUpdateQtd(id, currentQtd, maxQtd, collection, valorRecebido) {
             maxLoteAtual = maxQtd;
             entreguesAtualmente = currentQtd;
+            valorRecebidoAtualmente = parseFloat(valorRecebido || 0);
 
             document.getElementById('updateQtdId').value = id;
             document.getElementById('updateQtdCollection').value = collection || 'remessas';
             document.getElementById('updateQtdAtualHidden').value = currentQtd;
+            document.getElementById('updateValorRecebidoAtualHidden').value = valorRecebidoAtualmente;
             
             document.getElementById('updateQtdAtualLabel').innerText = currentQtd;
             document.getElementById('updateQtdMaxLabel').innerText = maxQtd;
+            document.getElementById('updateValorRecebidoLabel').innerText = 'R$ ' + valorRecebidoAtualmente.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
             
             // Sugere adicionar o que falta por padrão, ou pelo menos 1
             const falta = maxQtd - currentQtd;
             document.getElementById('updateQtdAdicionar').value = falta > 0 ? 1 : 0;
             document.getElementById('updateQtdAdicionar').setAttribute('max', falta);
+            document.getElementById('updateValorRecebidoAgora').value = ''; // Limpa campo de valor
             
             toggleModal('modalUpdateQtd');
         }

@@ -526,6 +526,9 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
         // pecas/tamanho
         if (empty($r['peca_servico']) && !empty($r['peca'])) $r['peca_servico'] = $r['peca'];
         if (empty($r['tamanho']) && !empty($r['size'])) $r['tamanho'] = $r['size'];
+
+        // valor_recebido
+        $r['valor_recebido'] = isset($r['valor_recebido']) ? floatval($r['valor_recebido']) : 0.0;
     }
     unset($r);
 
@@ -569,6 +572,7 @@ function firestore_add_remessa(array $data): array
         'quantidade' => isset($data['quantidade']) ? intval($data['quantidade']) : 1,
         'tamanho' => $data['tamanho'] ?? 'outro',
         'qtd_entregue' => isset($data['qtd_entregue']) ? intval($data['qtd_entregue']) : 0,
+        'valor_recebido' => isset($data['valor_recebido']) ? floatval($data['valor_recebido']) : 0.0,
         'data_cadastro' => $dataCadastro,
         'data_ultima_entrega' => $data['data_ultima_entrega'] ?? null,
     ]);
@@ -606,6 +610,10 @@ function firestore_update_remessa(string $docId, array $data, ?string $collectio
         $updateFields['qtd_entregue'] = intval($data['qtd_entregue']);
         $mask[] = 'updateMask.fieldPaths=qtd_entregue';
     }
+    if (isset($data['valor_recebido'])) {
+        $updateFields['valor_recebido'] = floatval($data['valor_recebido']);
+        $mask[] = 'updateMask.fieldPaths=valor_recebido';
+    }
     if (array_key_exists('data_ultima_entrega', $data)) {
         $updateFields['data_ultima_entrega'] = $data['data_ultima_entrega'];
         $mask[] = 'updateMask.fieldPaths=data_ultima_entrega';
@@ -622,12 +630,16 @@ function firestore_update_remessa(string $docId, array $data, ?string $collectio
     return true;
 }
 
-function firestore_update_remessa_entrega(string $docId, int $qtdEntregue, ?string $dataUltimaEntrega, ?string $collection = null): bool
+function firestore_update_remessa_entrega(string $docId, int $qtdEntregue, ?string $dataUltimaEntrega, ?string $collection = null, float $valorRecebido = null): bool
 {
-    return firestore_update_remessa($docId, [
+    $data = [
         'qtd_entregue' => $qtdEntregue,
         'data_ultima_entrega' => $dataUltimaEntrega
-    ], $collection);
+    ];
+    if ($valorRecebido !== null) {
+        $data['valor_recebido'] = $valorRecebido;
+    }
+    return firestore_update_remessa($docId, $data, $collection);
 }
 
 function firestore_delete_document(string $collection, string $docId): bool
