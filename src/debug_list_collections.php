@@ -1,9 +1,7 @@
 <?php
 require __DIR__ . '/firebase_helper.php';
 try {
-    $credsPath = getFirestoreCredentialsPath();
-    if (!$credsPath) throw new RuntimeException('Cred path not found');
-    $creds = firestore_load_service_account($credsPath);
+    $creds = firestore_get_credentials();
     echo "PROJECT_ID: " . firestore_get_project_id($creds) . "\n";
     $resp = firestore_request('POST', 'documents:listCollectionIds', ['pageSize' => 200]);
     echo "COLLECTIONS:\n";

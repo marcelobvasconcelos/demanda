@@ -257,7 +257,8 @@ function sync_firestore_on_start(PDO $pdo, array $opts = []): void
             return;
         }
 
-        $parent = 'projects/' . firestore_get_project_id(firestore_load_service_account(getFirestoreCredentialsPath())) . '/databases/(default)/documents';
+        $serviceAccount = firestore_get_credentials();
+        $parent = 'projects/' . firestore_get_project_id($serviceAccount) . '/databases/(default)/documents';
         $resp = firestore_request('POST', 'documents:listCollectionIds', ['parent' => $parent, 'pageSize' => 200]);
         $collections = $resp['collectionIds'] ?? [];
         if (empty($collections)) {

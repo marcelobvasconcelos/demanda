@@ -8,22 +8,19 @@ session_start();
 
 require __DIR__ . '/firebase_helper.php';
 
-$firestoreCredentialsPath = getFirestoreCredentialsPath();
 $firestoreEnabled = false;
 $firestoreStatusMessage = '';
 $serviceAccount = null;
 
-if ($firestoreCredentialsPath && function_exists('curl_init') && function_exists('openssl_sign')) {
+if (function_exists('curl_init') && function_exists('openssl_sign')) {
     try {
-        $serviceAccount = firestore_load_service_account($firestoreCredentialsPath);
+        $serviceAccount = firestore_get_credentials();
         $firestoreEnabled = true;
     } catch (Throwable $e) {
         $firestoreStatusMessage = 'Firestore offline: ' . $e->getMessage();
     }
-} elseif ($firestoreCredentialsPath) {
-    $firestoreStatusMessage = 'Firestore não disponível: lib cURL ou OpenSSL ausente.';
 } else {
-    $firestoreStatusMessage = 'Arquivo firebase_credenciais.json não encontrado.';
+    $firestoreStatusMessage = 'Firestore não disponível: lib cURL ou OpenSSL ausente.';
 }
 
 // A aplicação agora usa diretamente o Firebase / Firestore.

@@ -14,7 +14,7 @@ function getFirestoreCredentialsPath(): ?string
     ];
 
     foreach ($paths as $path) {
-        if ($path && file_exists($path)) {
+        if ($path && file_exists($path) && is_readable($path)) {
             return $path;
         }
     }
@@ -22,8 +22,46 @@ function getFirestoreCredentialsPath(): ?string
     return null;
 }
 
+function firestore_get_credentials(): array
+{
+    static $credentials = null;
+    if ($credentials !== null) {
+        return $credentials;
+    }
+
+    $firebaseJson = '';
+    $jsonPath = '/etc/secrets/firebase_credenciais.json';
+
+    // 1. PRIMEIRA OPÇÃO: Tenta a variável de ambiente do Render (Super segura e sem erro de permissão)
+    if (getenv('FIREBASE_CREDENTIALS_JSON') && trim(getenv('FIREBASE_CREDENTIALS_JSON')) !== '') {
+        $firebaseJson = getenv('FIREBASE_CREDENTIALS_JSON');
+    } 
+    // 2. SEGUNDA OPÇÃO: Tenta os caminhos de arquivo conhecidos
+    else {
+        $path = getFirestoreCredentialsPath();
+        if ($path && file_exists($path) && is_readable($path)) {
+            $firebaseJson = file_get_contents($path);
+        }
+    }
+
+    if (empty($firebaseJson)) {
+        throw new RuntimeException('Credenciais do Firebase não encontradas (verifique a variável FIREBASE_CREDENTIALS_JSON ou o arquivo firebase_credenciais.json).');
+    }
+
+    $credentials = json_decode($firebaseJson, true);
+    if (!is_array($credentials) || empty($credentials['client_email']) || empty($credentials['private_key']) || empty($credentials['project_id'])) {
+        throw new RuntimeException('Arquivo de credenciais do Firebase inválido ou incompleto.');
+    }
+
+    return $credentials;
+}
+
 function firestore_load_service_account(string $path): array
 {
+    // Mantido para compatibilidade, mas prefira firestore_get_credentials()
+    if (!file_exists($path) || !is_readable($path)) {
+        throw new RuntimeException("Arquivo de credenciais não encontrado ou sem permissão de leitura: $path");
+    }
     $content = file_get_contents($path);
     $data = json_decode($content, true);
     if (!is_array($data) || empty($data['client_email']) || empty($data['private_key']) || empty($data['project_id'])) {
@@ -123,12 +161,7 @@ function firestore_http_post(string $url, string $body, array $headers = []): ar
 
 function firestore_request(string $method, string $path, array $body = null): array
 {
-    $credsPath = getFirestoreCredentialsPath();
-    if (!$credsPath) {
-        throw new RuntimeException('Credenciais do Firebase não encontradas.');
-    }
-
-    $serviceAccount = firestore_load_service_account($credsPath);
+    $serviceAccount = firestore_get_credentials();
     $projectId = firestore_get_project_id($serviceAccount);
     $baseUrl = "https://firestore.googleapis.com/v1/projects/{$projectId}/databases/(default)/";
     $token = firestore_get_access_token($serviceAccount);
@@ -175,12 +208,7 @@ function firestore_request(string $method, string $path, array $body = null): ar
 
 function firebase_auth_request(string $method, string $path, array $body = null): array
 {
-    $credsPath = getFirestoreCredentialsPath();
-    if (!$credsPath) {
-        throw new RuntimeException('Credenciais do Firebase não encontradas.');
-    }
-
-    $serviceAccount = firestore_load_service_account($credsPath);
+    $serviceAccount = firestore_get_credentials();
     $token = firebase_get_access_token($serviceAccount, [
         'https://www.googleapis.com/auth/identitytoolkit',
         'https://www.googleapis.com/auth/cloud-platform',
@@ -274,12 +302,7 @@ function firebase_auth_sign_in_with_password(string $email, string $password): ?
 
 function firebase_auth_list_users(int $maxResults = 1000): array
 {
-    $credsPath = getFirestoreCredentialsPath();
-    if (!$credsPath) {
-        throw new RuntimeException('Credenciais do Firebase não encontradas.');
-    }
-
-    $serviceAccount = firestore_load_service_account($credsPath);
+    $serviceAccount = firestore_get_credentials();
     $projectId = firestore_get_project_id($serviceAccount);
     $path = "projects/{$projectId}/accounts:batchGet?maxResults=" . intval($maxResults);
 
@@ -676,26 +699,10 @@ function firestore_sync_user_to_local(PDO $pdo, array $userData): ?array
     $stmt->execute([$nome, $email, $senha]);
     return ['id' => $pdo->lastInsertId(), 'nome' => $nome, 'email' => $email, 'senha' => $senha];
 }
-$jsonPath = '/etc/secrets/firebase_credenciais.json';
-$firebaseJson = '';
 
-// 1. PRIMEIRA OPÇÃO: Tenta a variável de ambiente do Render (Super segura e sem erro de permissão)
-if (getenv('FIREBASE_CREDENTIALS_JSON') && trim(getenv('FIREBASE_CREDENTIALS_JSON')) !== '') {
-    $firebaseJson = getenv('FIREBASE_CREDENTIALS_JSON');
-} 
-// 2. SEGUNDA OPÇÃO: Só tenta o arquivo se ele existir E FOR LEGÍVEL (is_readable evita o Permission Denied)
-elseif (file_exists($jsonPath) && is_readable($jsonPath)) {
-    $firebaseJson = file_get_contents($jsonPath);
-} 
-// 3. TERCEIRA OPÇÃO: Fallback para o arquivo local da sua máquina
-elseif (file_exists(__DIR__ . '/firebase_credenciais.json')) {
-    $firebaseJson = file_get_contents(__DIR__ . '/firebase_credenciais.json');
+// Inicializa credenciais globais para compatibilidade
+try {
+    $credentials = firestore_get_credentials();
+} catch (Throwable $e) {
+    $credentials = null;
 }
-
-// Se depois de tudo ainda estiver vazio, evita que o SDK quebre feio
-if (empty($firebaseJson)) {
-    die("Erro crítico: Nenhuma credencial do Firebase foi encontrada no ambiente ou arquivo.");
-}
-
-// Converte para array para o SDK usar
-$credentials = json_decode($firebaseJson, true);
