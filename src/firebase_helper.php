@@ -387,7 +387,7 @@ function firestore_build_monthly_collection_name(string $userUid, string $date):
     $mes = $dt->format('m');
     $ano = $dt->format('Y');
     $monthName = $meses[$mes] ?? strtolower($dt->format('F'));
-    return $monthName . '-' . $ano . $userUid;
+    return $monthName . '-' . $ano . '-' . $userUid;
 }
 
 function firestore_build_monthly_collection_names_for_range(string $userUid, string $startDate, string $endDate): array
@@ -410,7 +410,7 @@ function firestore_collection_belongs_to_user(string $collection, string $userUi
         return false;
     }
 
-    return substr($collection, -strlen($userUid)) === $userUid;
+    return strpos($collection, '-' . $userUid) !== false;
 }
 
 function firestore_get_user_uid_by_email(string $email): ?string
@@ -533,22 +533,16 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
         @file_put_contents(__DIR__ . '/logs/firestore_query_docs.json', json_encode(['ts' => date('c'), 'docs' => $results], JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
     } catch (Throwable $e) {}
 
-    // Filtrar localmente pelo intervalo de datas e ordenar por data desc
-    $filtered = array_filter($results, function ($doc) use ($startDate, $endDate) {
-        $d = $doc['data_cadastro'] ?? null;
-        if (!$d) return false;
-        return ($d >= $startDate && $d <= $endDate);
-    });
-
-    usort($filtered, function ($a, $b) {
+    // Ordenar por data desc (mesmo que a data seja de outro mês, mantemos na lista do mês da coleção)
+    usort($results, function ($a, $b) {
         return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? '');
     });
 
     try {
-        @file_put_contents(__DIR__ . '/logs/firestore_query_filtered.json', json_encode(['ts' => date('c'), 'filtered_count' => count($filtered), 'filtered' => array_values($filtered)], JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
+        @file_put_contents(__DIR__ . '/logs/firestore_query_filtered.json', json_encode(['ts' => date('c'), 'results_count' => count($results), 'results' => array_values($results)], JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
     } catch (Throwable $e) {}
 
-    return array_values($filtered);
+    return array_values($results);
 }
 
 function firestore_add_remessa(array $data): array
