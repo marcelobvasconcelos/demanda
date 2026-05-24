@@ -135,6 +135,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         }
     }
 
+    elseif ($action === 'edit_remessa') {
+        $docId = trim($_POST['id'] ?? '');
+        $collection = trim($_POST['collection'] ?? '');
+        $peca = trim($_POST['peca_servico'] ?? '');
+        $preco = floatval($_POST['preco_unitario'] ?? 0);
+        $qtd = intval($_POST['quantidade'] ?? 0);
+        $tamanho = $_POST['tamanho'] ?? 'outro';
+        $usuarioUid = $_SESSION['firebase_localId'] ?? firestore_get_user_uid_by_email($_SESSION['usuario_email'] ?? '');
+
+        if ($docId === '' || $collection === '') {
+            $msgError = 'Documento de remessa inválido.';
+        } elseif ($peca === '' || $preco <= 0 || $qtd <= 0) {
+            $msgError = 'Preencha todos os campos corretamente.';
+        } elseif (!firestore_collection_belongs_to_user($collection, $usuarioUid ?? '')) {
+            $msgError = 'Esta remessa não pertence ao usuário logado.';
+        } else {
+            try {
+                firestore_update_remessa($docId, [
+                    'peca_servico' => $peca,
+                    'preco_unitario' => $preco,
+                    'quantidade' => $qtd,
+                    'tamanho' => $tamanho
+                ], $collection);
+                $msgSuccess = 'Remessa atualizada com sucesso!';
+            } catch (Throwable $e) {
+                $msgError = 'Erro ao atualizar remessa no Firestore: ' . $e->getMessage();
+            }
+        }
+    }
+
     elseif ($action === 'delete_remessa') {
         $docId = trim($_POST['id'] ?? '');
         $collection = trim($_POST['collection'] ?? '');
@@ -510,7 +540,7 @@ function abreviarNome($nomeCompleto) {
                                             <?php endif; ?>
 
                                             <!-- Notepad de Ajuste Rápido -->
-                                            <button onclick="openUpdateQtd(<?php echo json_encode($remessa['id']); ?>, <?php echo $remessa['qtd_entregue']; ?>, <?php echo $remessa['quantidade']; ?>, <?php echo json_encode($remessa['__collection'] ?? 'remessas'); ?>)" class="p-1.5 text-stone-400 hover:text-stone-850 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer" title="Atualizar entregas">
+                                            <button onclick="openEditRemessa(<?php echo htmlspecialchars(json_encode($remessa), ENT_QUOTES, 'UTF-8'); ?>)" class="p-1.5 text-stone-400 hover:text-stone-850 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer" title="Editar remessa">
                                                 <i data-lucide="pencil" class="w-4.5 h-4.5"></i>
                                             </button>
 
@@ -932,7 +962,67 @@ function abreviarNome($nomeCompleto) {
         </div>
     </div>
 
-    <!-- 4. Modal: Atualizar Peças Entregues no Lote (Notepad Click) -->
+    <!-- 4. Modal: Editar Lote de Remessa (Pencil Click) -->
+    <div id="modalEditRemessa" class="fixed inset-0 z-50 overflow-y-auto hidden">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-stone-950/40 transition-opacity" onclick="toggleModal('modalEditRemessa')"></div>
+            
+            <div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-md w-full border border-stone-200">
+                <div class="bg-stone-900 text-white p-6 flex justify-between items-center">
+                    <h3 class="font-serif text-xl font-bold flex items-center gap-2">
+                        <i data-lucide="pencil-line" class="w-5 h-5 text-atelier-brand"></i>
+                        Editar Remessa
+                    </h3>
+                    <button onclick="toggleModal('modalEditRemessa')" class="text-stone-400 hover:text-white cursor-pointer transition-colors">
+                        <i data-lucide="x" class="w-6 h-6"></i>
+                    </button>
+                </div>
+
+                <form method="POST" class="p-6 space-y-4">
+                    <input type="hidden" name="action" value="edit_remessa">
+                    <input type="hidden" name="id" id="editRemessaId">
+                    <input type="hidden" name="collection" id="editRemessaCollection">
+
+                    <!-- Peça/Serviço -->
+                    <div>
+                        <label class="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Peça ou Serviço</label>
+                        <input type="text" name="peca_servico" id="editRemessaPeca" required class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
+                    </div>
+
+                    <!-- Preço & Quantidade -->
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Preço Unitário</label>
+                            <input type="number" step="0.01" name="preco_unitario" id="editRemessaPreco" required class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Quantidade</label>
+                            <input type="number" name="quantidade" id="editRemessaQtd" required class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
+                        </div>
+                    </div>
+
+                    <!-- Tamanhos -->
+                    <div>
+                        <label class="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Tamanho</label>
+                        <div class="flex flex-wrap gap-2 justify-center py-2 bg-stone-50 rounded-2xl border border-stone-200">
+                            <?php foreach (['PP', 'P', 'M', 'G', 'GG', 'XG', 'outro'] as $t): ?>
+                                <label class="flex flex-col items-center gap-1 px-3 py-2 border border-stone-200 rounded-xl cursor-pointer hover:bg-white active:scale-95 transition-all text-xs font-bold">
+                                    <input type="radio" name="tamanho" value="<?php echo $t; ?>" id="editRemessaTamanho_<?php echo $t; ?>" class="accent-stone-900">
+                                    <span><?php echo $t; ?></span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="w-full bg-stone-950 hover:bg-stone-850 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer">
+                        Salvar Alterações
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. Modal: Atualizar Peças Entregues no Lote (Plus Click) -->
     <div id="modalUpdateQtd" class="fixed inset-0 z-50 overflow-y-auto hidden">
         <div class="flex items-center justify-center min-h-screen px-4">
             <div class="fixed inset-0 bg-stone-950/40 transition-opacity" onclick="toggleModal('modalUpdateQtd')"></div>
@@ -1012,6 +1102,22 @@ function abreviarNome($nomeCompleto) {
         // Preenche o campo de entregas com a capacidade máxima do lote
         function setTotalEntregasMax() {
             document.getElementById('updateQtdValue').value = maxLoteAtual;
+        }
+
+        // Abre o modal de edição completa da remessa
+        function openEditRemessa(remessa) {
+            document.getElementById('editRemessaId').value = remessa.id;
+            document.getElementById('editRemessaCollection').value = remessa.__collection || 'remessas';
+            document.getElementById('editRemessaPeca').value = remessa.peca_servico;
+            document.getElementById('editRemessaPreco').value = remessa.preco_unitario;
+            document.getElementById('editRemessaQtd').value = remessa.quantidade;
+            
+            // Marca o radio do tamanho correto
+            const tamanho = remessa.tamanho || 'outro';
+            const radio = document.getElementById('editRemessaTamanho_' + tamanho);
+            if (radio) radio.checked = true;
+
+            toggleModal('modalEditRemessa');
         }
 
         // Troca de abas no modal de Perfil (Login vs Cadastro)

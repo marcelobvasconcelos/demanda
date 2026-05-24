@@ -577,19 +577,57 @@ function firestore_add_remessa(array $data): array
     return ['id' => $docId, '__collection' => $collection] + $data;
 }
 
-function firestore_update_remessa_entrega(string $docId, int $qtdEntregue, ?string $dataUltimaEntrega, ?string $collection = null): bool
+function firestore_update_remessa(string $docId, array $data, ?string $collection = null): bool
 {
     if (!$collection) {
         $collection = 'remessas';
     }
 
-    $fields = firestore_build_fields([
-        'qtd_entregue' => $qtdEntregue,
-        'data_ultima_entrega' => $dataUltimaEntrega,
-    ]);
+    $updateFields = [];
+    $mask = [];
 
-    firestore_request('PATCH', 'documents/' . rawurlencode($collection) . '/' . rawurlencode($docId) . '?updateMask.fieldPaths=qtd_entregue&updateMask.fieldPaths=data_ultima_entrega', ['fields' => $fields]);
+    if (isset($data['peca_servico'])) {
+        $updateFields['peca_servico'] = $data['peca_servico'];
+        $mask[] = 'updateMask.fieldPaths=peca_servico';
+    }
+    if (isset($data['preco_unitario'])) {
+        $updateFields['preco_unitario'] = floatval($data['preco_unitario']);
+        $mask[] = 'updateMask.fieldPaths=preco_unitario';
+    }
+    if (isset($data['quantidade'])) {
+        $updateFields['quantidade'] = intval($data['quantidade']);
+        $mask[] = 'updateMask.fieldPaths=quantidade';
+    }
+    if (isset($data['tamanho'])) {
+        $updateFields['tamanho'] = $data['tamanho'];
+        $mask[] = 'updateMask.fieldPaths=tamanho';
+    }
+    if (isset($data['qtd_entregue'])) {
+        $updateFields['qtd_entregue'] = intval($data['qtd_entregue']);
+        $mask[] = 'updateMask.fieldPaths=qtd_entregue';
+    }
+    if (array_key_exists('data_ultima_entrega', $data)) {
+        $updateFields['data_ultima_entrega'] = $data['data_ultima_entrega'];
+        $mask[] = 'updateMask.fieldPaths=data_ultima_entrega';
+    }
+
+    if (empty($updateFields)) {
+        return true;
+    }
+
+    $fields = firestore_build_fields($updateFields);
+    $maskStr = implode('&', $mask);
+
+    firestore_request('PATCH', 'documents/' . rawurlencode($collection) . '/' . rawurlencode($docId) . '?' . $maskStr, ['fields' => $fields]);
     return true;
+}
+
+function firestore_update_remessa_entrega(string $docId, int $qtdEntregue, ?string $dataUltimaEntrega, ?string $collection = null): bool
+{
+    return firestore_update_remessa($docId, [
+        'qtd_entregue' => $qtdEntregue,
+        'data_ultima_entrega' => $dataUltimaEntrega
+    ], $collection);
 }
 
 function firestore_delete_document(string $collection, string $docId): bool
