@@ -487,9 +487,12 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
             // Priorizamos 'data' e 'data_entrada' (registro) sobre 'data_entrega' (conclusão)
             $candidates = [$r['data'] ?? null, $r['data_entrada'] ?? null, $r['data_entrega'] ?? null, $r['data_ultima_entrega'] ?? null];
             foreach ($candidates as $cand) {
-                if (is_string($cand) && strpos($cand, 'T') !== false) {
-                    $r['data_cadastro'] = substr($cand, 0, 10);
-                    break;
+                if (is_string($cand) && $cand !== '') {
+                    // Se tiver 'T', pega só a data. Se não tiver, assume que já é a data ou tenta extrair
+                    $r['data_cadastro'] = (strpos($cand, 'T') !== false) ? substr($cand, 0, 10) : substr($cand, 0, 10);
+                    if (preg_match('/^\d{4}-\d{2}-\d{2}/', $r['data_cadastro'])) {
+                        break;
+                    }
                 }
             }
         }
@@ -568,13 +571,19 @@ function firestore_add_remessa(array $data): array
         'usuario_email' => strtolower(trim($data['usuario_email'] ?? '')),
         'usuario_nome' => $data['usuario_nome'] ?? '',
         'peca_servico' => $data['peca_servico'] ?? '',
+        'peca' => $data['peca_servico'] ?? '', // Compatibilidade
         'preco_unitario' => isset($data['preco_unitario']) ? floatval($data['preco_unitario']) : 0.0,
         'quantidade' => isset($data['quantidade']) ? intval($data['quantidade']) : 1,
+        'qtd' => isset($data['quantidade']) ? intval($data['quantidade']) : 1, // Compatibilidade (Total)
         'tamanho' => $data['tamanho'] ?? 'outro',
+        'size' => $data['tamanho'] ?? 'outro', // Compatibilidade
         'qtd_entregue' => isset($data['qtd_entregue']) ? intval($data['qtd_entregue']) : 0,
+        'entregue' => isset($data['qtd_entregue']) ? intval($data['qtd_entregue']) : 0, // Compatibilidade
         'valor_recebido' => isset($data['valor_recebido']) ? floatval($data['valor_recebido']) : 0.0,
         'data_cadastro' => $dataCadastro,
+        'data' => $dataCadastro, // Compatibilidade
         'data_ultima_entrega' => $data['data_ultima_entrega'] ?? null,
+        'data_entrega' => $data['data_ultima_entrega'] ?? null, // Compatibilidade
     ]);
 
     firestore_request('POST', 'documents/' . rawurlencode($collection) . '?documentId=' . rawurlencode($docId), ['fields' => $fields]);
@@ -592,7 +601,9 @@ function firestore_update_remessa(string $docId, array $data, ?string $collectio
 
     if (isset($data['peca_servico'])) {
         $updateFields['peca_servico'] = $data['peca_servico'];
+        $updateFields['peca'] = $data['peca_servico']; // Compatibilidade
         $mask[] = 'updateMask.fieldPaths=peca_servico';
+        $mask[] = 'updateMask.fieldPaths=peca';
     }
     if (isset($data['preco_unitario'])) {
         $updateFields['preco_unitario'] = floatval($data['preco_unitario']);
@@ -600,15 +611,21 @@ function firestore_update_remessa(string $docId, array $data, ?string $collectio
     }
     if (isset($data['quantidade'])) {
         $updateFields['quantidade'] = intval($data['quantidade']);
+        $updateFields['qtd'] = intval($data['quantidade']); // Compatibilidade (Total)
         $mask[] = 'updateMask.fieldPaths=quantidade';
+        $mask[] = 'updateMask.fieldPaths=qtd';
     }
     if (isset($data['tamanho'])) {
         $updateFields['tamanho'] = $data['tamanho'];
+        $updateFields['size'] = $data['tamanho']; // Compatibilidade
         $mask[] = 'updateMask.fieldPaths=tamanho';
+        $mask[] = 'updateMask.fieldPaths=size';
     }
     if (isset($data['qtd_entregue'])) {
         $updateFields['qtd_entregue'] = intval($data['qtd_entregue']);
+        $updateFields['entregue'] = intval($data['qtd_entregue']); // Compatibilidade
         $mask[] = 'updateMask.fieldPaths=qtd_entregue';
+        $mask[] = 'updateMask.fieldPaths=entregue';
     }
     if (isset($data['valor_recebido'])) {
         $updateFields['valor_recebido'] = floatval($data['valor_recebido']);
@@ -616,7 +633,9 @@ function firestore_update_remessa(string $docId, array $data, ?string $collectio
     }
     if (array_key_exists('data_ultima_entrega', $data)) {
         $updateFields['data_ultima_entrega'] = $data['data_ultima_entrega'];
+        $updateFields['data_entrega'] = $data['data_ultima_entrega']; // Compatibilidade
         $mask[] = 'updateMask.fieldPaths=data_ultima_entrega';
+        $mask[] = 'updateMask.fieldPaths=data_entrega';
     }
 
     if (empty($updateFields)) {
