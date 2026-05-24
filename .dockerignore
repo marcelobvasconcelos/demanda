@@ -1,0 +1,9 @@
+.git
+.qodo
+firebase_credenciais.json
+src/firebase_credenciais.json
+src/logs
+src/tmp
+src/vendor
+*.log
+

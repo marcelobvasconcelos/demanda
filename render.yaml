@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: demanda
+    runtime: docker
+    plan: free
+    dockerfilePath: ./docker/php/Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    envVars:
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /etc/secrets/firebase_credenciais.json

@@ -1,6 +1,5 @@
 FROM php:8.2-apache
 
-# Instala dependências necessárias e extensões PHP
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git \
@@ -16,6 +15,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         libcurl4-openssl-dev \
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer \
     && docker-php-ext-install pdo pdo_mysql curl zip \
     && pecl channel-update pecl.php.net \
     && pecl install grpc protobuf || true \
@@ -25,8 +25,11 @@ RUN apt-get update \
 
 WORKDIR /var/www/html
 
-ENV GOOGLE_APPLICATION_CREDENTIALS=/var/www/html/firebase_credenciais.json
+ENV GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/firebase_credenciais.json
+
+COPY src/composer.json src/composer.lock ./
+RUN composer install --no-dev --optimize-autoloader --no-interaction
+
+COPY src/ ./
 
 EXPOSE 80
-
-# Usar bind-mount de ./src para código durante desenvolvimento

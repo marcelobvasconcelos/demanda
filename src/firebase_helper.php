@@ -7,12 +7,14 @@
 function getFirestoreCredentialsPath(): ?string
 {
     $paths = [
+        getenv('GOOGLE_APPLICATION_CREDENTIALS') ?: null,
+        '/etc/secrets/firebase_credenciais.json',
         __DIR__ . '/../firebase_credenciais.json',
         __DIR__ . '/firebase_credenciais.json',
     ];
 
     foreach ($paths as $path) {
-        if (file_exists($path)) {
+        if ($path && file_exists($path)) {
             return $path;
         }
     }
