@@ -112,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         $preco = floatval($_POST['preco_unitario'] ?? 0);
         $qtd = intval($_POST['quantidade'] ?? 0);
         $tamanho = $_POST['tamanho'] ?? 'outro';
-        $dataCadastro = date("Y-m-d");
+        $dataCadastro = date("Y-m-d\TH:i:s");
 
         if ($usuarioEmail === '') {
             $msgError = 'Faça login para registrar remessas.';
@@ -157,7 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
             $msgError = 'Esta remessa não pertence ao usuário logado.';
         } else {
             try {
-                $dataUltimaEntrega = $qtdTotal > 0 ? date('Y-m-d') : null;
+                $dataUltimaEntrega = $qtdTotal > 0 ? date('Y-m-d\TH:i:s') : null;
                 firestore_update_remessa_entrega($docId, $qtdTotal, $dataUltimaEntrega, $collection, $valorRecebidoTotal);
                 
                 if ($qtdAdicionar < 0 || $valorRecebidoAgora < 0) {
