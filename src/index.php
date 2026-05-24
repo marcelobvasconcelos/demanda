@@ -146,6 +146,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         }
     }
 
+    elseif ($action === 'update_pagamento') {
+        $docId = trim($_POST['id'] ?? '');
+        $collection = trim($_POST['collection'] ?? '');
+        $valorRecebidoAgora = floatval($_POST['valor_recebido_agora'] ?? 0);
+        $valorRecebidoAtual = floatval($_POST['valor_recebido_atual'] ?? 0);
+        $valorRecebidoTotal = $valorRecebidoAtual + $valorRecebidoAgora;
+
+        $usuarioUid = $_SESSION['firebase_localId'] ?? firestore_get_user_uid_by_email($_SESSION['usuario_email'] ?? '');
+
+        if ($docId === '' || $collection === '') {
+            $msgError = 'Documento de remessa inválido.';
+        } elseif (!firestore_collection_belongs_to_user($collection, $usuarioUid ?? '')) {
+            $msgError = 'Esta remessa não pertence ao usuário logado.';
+        } else {
+            try {
+                firestore_update_remessa($docId, ['valor_recebido' => $valorRecebidoTotal], $collection);
+                $msgSuccess = 'Pagamento registrado com sucesso! +' . formatReal($valorRecebidoAgora);
+            } catch (Throwable $e) {
+                $msgError = 'Erro ao atualizar pagamento no Firestore: ' . $e->getMessage();
+            }
+        }
+    }
+
     elseif ($action === 'edit_remessa') {
         $docId = trim($_POST['id'] ?? '');
         $collection = trim($_POST['collection'] ?? '');
@@ -541,20 +564,24 @@ function abreviarNome($nomeCompleto) {
 
                                         <!-- Ações rápidas -->
                                         <div class="flex items-center gap-1.5">
-                                            <!-- Checkbox/Círculo de Conclusão Rápida -->
+                                            <!-- Registrar Pagamento (Símbolo $) -->
+                                            <button onclick="openUpdatePagamento(<?php echo htmlspecialchars(json_encode($remessa['id']), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['valor_recebido']; ?>, <?php echo htmlspecialchars(json_encode($remessa['__collection'] ?? 'remessas'), ENT_QUOTES, 'UTF-8'); ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 hover:border-emerald-600 bg-white flex items-center justify-center text-emerald-500 hover:text-emerald-700 transition-colors cursor-pointer" title="Registrar Pagamento">
+                                                <span class="text-xs font-bold">$</span>
+                                            </button>
+
+                                            <!-- Abre atualização de quantidade entregue -->
                                             <?php if ($isConcluido): ?>
-                                                <button class="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center border border-emerald-200" title="Lote Completado!">
+                                                <button onclick="openUpdateQtd(<?php echo htmlspecialchars(json_encode($remessa['id']), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['qtd_entregue']; ?>, <?php echo $remessa['quantidade']; ?>, <?php echo htmlspecialchars(json_encode($remessa['__collection'] ?? 'remessas'), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['valor_recebido']; ?>)" class="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center border border-emerald-200 hover:border-emerald-400 transition-colors cursor-pointer" title="Lote Concluído (Clique para alterar)">
                                                     <i data-lucide="check" class="w-4 h-4 font-bold"></i>
                                                 </button>
                                             <?php else: ?>
-                                                <!-- Abre atualização de quantidade entregue -->
                                                 <button onclick="openUpdateQtd(<?php echo htmlspecialchars(json_encode($remessa['id']), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['qtd_entregue']; ?>, <?php echo $remessa['quantidade']; ?>, <?php echo htmlspecialchars(json_encode($remessa['__collection'] ?? 'remessas'), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['valor_recebido']; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 hover:border-stone-900 bg-white flex items-center justify-center text-stone-500 hover:text-stone-900 transition-colors cursor-pointer" title="Registrar Entregas">
                                                     <span class="text-xs font-bold">+</span>
                                                 </button>
                                             <?php endif; ?>
 
                                             <!-- Notepad de Ajuste Rápido -->
-                                            <button onclick="openEditRemessa(<?php echo htmlspecialchars(json_encode($remessa), ENT_QUOTES, 'UTF-8'); ?>)" class="p-1.5 text-stone-400 hover:text-stone-850 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer" title="Editar remessa">
+                                            <button onclick="openEditRemessa(<?php echo htmlspecialchars(json_encode($remessa), ENT_QUOTES, 'UTF-8'); ?>)" class="p-1.5 text-stone-400 hover:text-stone-850 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer" title="Editar lote completo">
                                                 <i data-lucide="pencil" class="w-4.5 h-4.5"></i>
                                             </button>
 
@@ -1080,10 +1107,10 @@ function abreviarNome($nomeCompleto) {
             <div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-sm w-full border border-stone-200">
                 <div class="bg-stone-900 text-white p-5 flex justify-between items-center">
                     <h3 class="font-serif text-lg font-bold flex items-center gap-2">
-                        <i data-lucide="pencil-line" class="w-4.5 h-4.5 text-atelier-brand"></i>
+                        <i data-lucide="plus-circle" class="w-4.5 h-4.5 text-atelier-brand"></i>
                         Registrar Entregas
                     </h3>
-                    <button onclick="toggleModal('modalUpdateQtd')" class="text-stone-400 hover:text-white cursor-pointer"><i data-lucide="x" class="w-5 h-5"></i></button>
+                    <button onclick="toggleModal('modalUpdateQtd')" class="text-stone-400 hover:text-white cursor-pointer transition-colors"><i data-lucide="x" class="w-5 h-5"></i></button>
                 </div>
 
                 <form method="POST" class="p-6 space-y-4">
@@ -1100,7 +1127,7 @@ function abreviarNome($nomeCompleto) {
                     <div>
                         <label class="block text-xs font-bold text-stone-400 uppercase mb-1">Quantas peças entregar agora?</label>
                         <div class="flex items-center gap-3">
-                            <input type="number" name="qtd_adicionar" id="updateQtdAdicionar" required min="1" value="1" class="flex-grow bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
+                            <input type="number" name="qtd_adicionar" id="updateQtdAdicionar" required min="0" value="1" class="flex-grow bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
                             <!-- Botão rápido para completar o lote -->
                             <button type="button" onclick="setQtdRestante()" class="bg-stone-100 hover:bg-stone-200 text-stone-800 border border-stone-300 px-3 py-3 rounded-xl text-xs font-bold transition-colors cursor-pointer">
                                 Restante
@@ -1116,6 +1143,40 @@ function abreviarNome($nomeCompleto) {
 
                     <button type="submit" class="w-full bg-stone-950 hover:bg-stone-850 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer">
                         Confirmar Entrega
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 6. Modal: Registrar Pagamento Apenas ($ Click) -->
+    <div id="modalUpdatePagamento" class="fixed inset-0 z-50 overflow-y-auto hidden">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-stone-950/40 transition-opacity" onclick="toggleModal('modalUpdatePagamento')"></div>
+            
+            <div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-sm w-full border border-stone-200">
+                <div class="bg-emerald-900 text-white p-5 flex justify-between items-center">
+                    <h3 class="font-serif text-lg font-bold flex items-center gap-2">
+                        <i data-lucide="banknote" class="w-4.5 h-4.5 text-emerald-400"></i>
+                        Registrar Pagamento
+                    </h3>
+                    <button onclick="toggleModal('modalUpdatePagamento')" class="text-stone-300 hover:text-white cursor-pointer transition-colors"><i data-lucide="x" class="w-5 h-5"></i></button>
+                </div>
+
+                <form method="POST" class="p-6 space-y-4">
+                    <input type="hidden" name="action" value="update_pagamento">
+                    <input type="hidden" name="id" id="updatePagId">
+                    <input type="hidden" name="collection" id="updatePagCollection">
+                    <input type="hidden" name="valor_recebido_atual" id="updatePagAtualHidden">
+
+                    <div>
+                        <label class="block text-xs font-bold text-stone-400 uppercase mb-1">Valor recebido (R$)</label>
+                        <input type="number" step="0.01" name="valor_recebido_agora" required placeholder="0,00" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
+                        <p class="text-[10px] text-stone-400 mt-1">Já recebido: <span id="updatePagLabel" class="font-bold text-stone-600">R$ 0,00</span></p>
+                    </div>
+
+                    <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer">
+                        Salvar Pagamento
                     </button>
                 </form>
             </div>
@@ -1169,6 +1230,15 @@ function abreviarNome($nomeCompleto) {
             document.getElementById('updateValorRecebidoAgora').value = ''; // Limpa campo de valor
             
             toggleModal('modalUpdateQtd');
+        }
+
+        function openUpdatePagamento(id, valorRecebido, collection) {
+            const val = parseFloat(valorRecebido || 0);
+            document.getElementById('updatePagId').value = id;
+            document.getElementById('updatePagCollection').value = collection || 'remessas';
+            document.getElementById('updatePagAtualHidden').value = val;
+            document.getElementById('updatePagLabel').innerText = 'R$ ' + val.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            toggleModal('modalUpdatePagamento');
         }
 
         // Preenche o campo de adicionar com o que falta para completar o lote
