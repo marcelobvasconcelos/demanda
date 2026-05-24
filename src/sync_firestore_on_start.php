@@ -237,8 +237,9 @@ function sync_firestore_on_start(PDO $pdo, array $opts = []): void
     if (!is_dir($lockDir)) @mkdir($lockDir, 0755, true);
     $lockFile = $lockDir . '/firestore_sync.lock';
     $lockTtl = $opts['lock_ttl'] ?? 300; // seconds
+    $force = $opts['force'] ?? false;
 
-    if (file_exists($lockFile)) {
+    if (!$force && file_exists($lockFile)) {
         $age = time() - filemtime($lockFile);
         if ($age < $lockTtl) {
             return;

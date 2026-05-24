@@ -7,6 +7,7 @@
 session_start();
 
 require __DIR__ . '/firebase_helper.php';
+require __DIR__ . '/sync_firestore_on_start.php';
 
 $firestoreEnabled = false;
 $firestoreStatusMessage = '';
@@ -23,10 +24,33 @@ if (function_exists('curl_init') && function_exists('openssl_sign')) {
     $firestoreStatusMessage = 'Firestore não disponível: lib cURL ou OpenSSL ausente.';
 }
 
-// A aplicação agora usa diretamente o Firebase / Firestore.
+// Conexão MySQL (Opcional, usado para Dashboard e Sincronização)
 $dbConnected = false;
 $connectionError = '';
 $pdo = null;
+
+try {
+    $db_host = getenv('DB_HOST') ?: 'mysql';
+    $db_port = getenv('DB_PORT') ?: '3306';
+    $db_name = getenv('DB_DATABASE') ?: 'costureira_db';
+    $db_user = getenv('DB_USERNAME') ?: 'costureira_user';
+    $db_pass = getenv('DB_PASSWORD') ?: 'costureira_pass';
+    
+    $dsn = "mysql:host={$db_host};port={$db_port};dbname={$db_name};charset=utf8mb4";
+    $pdo = new PDO($dsn, $db_user, $db_pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_TIMEOUT => 3
+    ]);
+    $dbConnected = true;
+    
+    // Sincronização automática em background (a cada 5 minutos por padrão)
+    if ($firestoreEnabled) {
+        sync_firestore_on_start($pdo);
+    }
+} catch (Throwable $e) {
+    $connectionError = $e->getMessage();
+}
 
 // Lógica de Abas
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'remessas';
@@ -119,11 +143,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         $collection = trim($_POST['collection'] ?? '');
         $qtdAdicionar = intval($_POST['qtd_adicionar'] ?? 0);
         $qtdAtual = intval($_POST['qtd_atual'] ?? 0);
-        $qtdTotal = $qtdAtual + $qtdAdicionar;
+        $qtdTotal = max(0, $qtdAtual + $qtdAdicionar); // Evita total negativo
         
         $valorRecebidoAgora = floatval($_POST['valor_recebido_agora'] ?? 0);
         $valorRecebidoAtual = floatval($_POST['valor_recebido_atual'] ?? 0);
-        $valorRecebidoTotal = $valorRecebidoAtual + $valorRecebidoAgora;
+        $valorRecebidoTotal = max(0, $valorRecebidoAtual + $valorRecebidoAgora); // Evita total negativo
 
         $usuarioUid = $_SESSION['firebase_localId'] ?? firestore_get_user_uid_by_email($_SESSION['usuario_email'] ?? '');
 
@@ -136,9 +160,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
                 $dataUltimaEntrega = $qtdTotal > 0 ? date('Y-m-d') : null;
                 firestore_update_remessa_entrega($docId, $qtdTotal, $dataUltimaEntrega, $collection, $valorRecebidoTotal);
                 
-                $msgSuccess = 'Entrega registrada com sucesso! +' . $qtdAdicionar . ' peças.';
-                if ($valorRecebidoAgora > 0) {
-                    $msgSuccess .= ' Recebido: ' . formatReal($valorRecebidoAgora);
+                if ($qtdAdicionar < 0 || $valorRecebidoAgora < 0) {
+                    $msgSuccess = 'Estorno registrado com sucesso!';
+                } else {
+                    $msgSuccess = 'Entrega registrada com sucesso! +' . $qtdAdicionar . ' peças.';
                 }
             } catch (Throwable $e) {
                 $msgError = 'Erro ao atualizar remessa no Firestore: ' . $e->getMessage();
@@ -151,7 +176,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         $collection = trim($_POST['collection'] ?? '');
         $valorRecebidoAgora = floatval($_POST['valor_recebido_agora'] ?? 0);
         $valorRecebidoAtual = floatval($_POST['valor_recebido_atual'] ?? 0);
-        $valorRecebidoTotal = $valorRecebidoAtual + $valorRecebidoAgora;
+        $valorRecebidoTotal = max(0, $valorRecebidoAtual + $valorRecebidoAgora);
 
         $usuarioUid = $_SESSION['firebase_localId'] ?? firestore_get_user_uid_by_email($_SESSION['usuario_email'] ?? '');
 
@@ -162,7 +187,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         } else {
             try {
                 firestore_update_remessa($docId, ['valor_recebido' => $valorRecebidoTotal], $collection);
-                $msgSuccess = 'Pagamento registrado com sucesso! +' . formatReal($valorRecebidoAgora);
+                $msgSuccess = $valorRecebidoAgora < 0 ? 'Estorno de pagamento realizado!' : 'Pagamento registrado com sucesso! +' . formatReal($valorRecebidoAgora);
             } catch (Throwable $e) {
                 $msgError = 'Erro ao atualizar pagamento no Firestore: ' . $e->getMessage();
             }
@@ -206,7 +231,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         if ($docId === '' || $collection === '') {
             $msgError = 'Documento de remessa inválido.';
         } elseif (!firestore_collection_belongs_to_user($collection, $usuarioUid ?? '')) {
-            $msgError = 'Esta remessa nÃ£o pertence ao usuÃ¡rio logado.';
+            $msgError = 'Esta remessa não pertence ao usuário logado.';
         } else {
             try {
                 firestore_delete_document($collection, $docId);
@@ -218,7 +243,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
     }
 
     elseif ($action === 'sync_remessas') {
-        $msgSuccess = 'Atualização do Firestore concluída. A página foi recarregada com os dados mais recentes.';
+        try {
+            if ($dbConnected && $pdo) {
+                sync_firestore_on_start($pdo, ['force' => true]);
+            }
+            $msgSuccess = 'Dados do Firebase recarregados com sucesso!';
+            // Redireciona para evitar re-submit e limpar cache do browser se houver
+            header("Location: ?tab={$activeTab}&mes={$filtroMes}&ano={$filtroAno}&synced=1");
+            exit;
+        } catch (Throwable $e) {
+            $msgError = 'Erro ao sincronizar: ' . $e->getMessage();
+        }
     }
 }
 
@@ -1127,7 +1162,7 @@ function abreviarNome($nomeCompleto) {
                     <div>
                         <label class="block text-xs font-bold text-stone-400 uppercase mb-1">Quantas peças entregar agora?</label>
                         <div class="flex items-center gap-3">
-                            <input type="number" name="qtd_adicionar" id="updateQtdAdicionar" required min="0" value="1" class="flex-grow bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
+                            <input type="number" name="qtd_adicionar" id="updateQtdAdicionar" required value="1" class="flex-grow bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
                             <!-- Botão rápido para completar o lote -->
                             <button type="button" onclick="setQtdRestante()" class="bg-stone-100 hover:bg-stone-200 text-stone-800 border border-stone-300 px-3 py-3 rounded-xl text-xs font-bold transition-colors cursor-pointer">
                                 Restante
