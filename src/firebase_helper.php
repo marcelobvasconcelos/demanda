@@ -356,7 +356,7 @@ function firestore_build_fields(array $data): array
     $fields = [];
     foreach ($data as $key => $value) {
         if (is_int($value)) {
-            $fields[$key] = ['integerValue' => (string) $value];
+            $fields[$key] = ['integerValue' => $value];
         } elseif (is_float($value)) {
             $fields[$key] = ['doubleValue' => $value];
         } elseif (is_bool($value)) {
