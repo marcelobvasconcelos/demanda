@@ -676,3 +676,24 @@ function firestore_sync_user_to_local(PDO $pdo, array $userData): ?array
     $stmt->execute([$nome, $email, $senha]);
     return ['id' => $pdo->lastInsertId(), 'nome' => $nome, 'email' => $email, 'senha' => $senha];
 }
+// ... código anterior do seu arquivo ...
+
+$jsonPath = '/etc/secrets/firebase_credenciais.json';
+$firebaseJson = '';
+
+// Se a variável de ambiente existir no Render, usa ela direto (Evita erro de permissão)
+if (getenv('FIREBASE_CREDENTIALS_JSON')) {
+    $firebaseJson = getenv('FIREBASE_CREDENTIALS_JSON');
+} 
+// Se não, tenta ler o arquivo físico (como funciona localmente na sua máquina)
+elseif (file_exists($jsonPath) && is_readable($jsonPath)) {
+    $firebaseJson = file_get_contents($jsonPath);
+} elseif (file_exists(__DIR__ . '/firebase_credenciais.json')) {
+    $firebaseJson = file_get_contents(__DIR__ . '/firebase_credenciais.json');
+}
+
+// Quando for passar as credenciais para o SDK do Firebase, em vez de passar o caminho,
+// você passa os dados convertidos de texto para Array:
+$credentials = json_decode($firebaseJson, true);
+
+// ... restante do seu código que inicializa o Firebase ...
