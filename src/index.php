@@ -117,18 +117,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
     elseif ($action === 'update_entrega') {
         $docId = trim($_POST['id'] ?? '');
         $collection = trim($_POST['collection'] ?? '');
-        $qtdEntregue = intval($_POST['qtd_entregue'] ?? 0);
+        $qtdAdicionar = intval($_POST['qtd_adicionar'] ?? 0);
+        $qtdAtual = intval($_POST['qtd_atual'] ?? 0);
+        $qtdTotal = $qtdAtual + $qtdAdicionar;
         $usuarioUid = $_SESSION['firebase_localId'] ?? firestore_get_user_uid_by_email($_SESSION['usuario_email'] ?? '');
 
         if ($docId === '' || $collection === '') {
             $msgError = 'Documento de remessa inválido.';
         } elseif (!firestore_collection_belongs_to_user($collection, $usuarioUid ?? '')) {
-            $msgError = 'Esta remessa nÃ£o pertence ao usuÃ¡rio logado.';
+            $msgError = 'Esta remessa não pertence ao usuário logado.';
         } else {
             try {
-                $dataUltimaEntrega = $qtdEntregue > 0 ? date('Y-m-d') : null;
-                firestore_update_remessa_entrega($docId, $qtdEntregue, $dataUltimaEntrega, $collection);
-                $msgSuccess = 'Status de entrega atualizado!';
+                $dataUltimaEntrega = $qtdTotal > 0 ? date('Y-m-d') : null;
+                firestore_update_remessa_entrega($docId, $qtdTotal, $dataUltimaEntrega, $collection);
+                $msgSuccess = 'Entrega registrada com sucesso! +' . $qtdAdicionar . ' peças.';
             } catch (Throwable $e) {
                 $msgError = 'Erro ao atualizar remessa no Firestore: ' . $e->getMessage();
             }
@@ -534,7 +536,7 @@ function abreviarNome($nomeCompleto) {
                                                 </button>
                                             <?php else: ?>
                                                 <!-- Abre atualização de quantidade entregue -->
-                                                <button onclick="openUpdateQtd(<?php echo json_encode($remessa['id']); ?>, <?php echo $remessa['qtd_entregue']; ?>, <?php echo $remessa['quantidade']; ?>, <?php echo json_encode($remessa['__collection'] ?? 'remessas'); ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 hover:border-stone-900 bg-white flex items-center justify-center text-stone-500 hover:text-stone-900 transition-colors cursor-pointer" title="Registrar Entregas">
+                                                <button onclick="openUpdateQtd(<?php echo htmlspecialchars(json_encode($remessa['id']), ENT_QUOTES, 'UTF-8'); ?>, <?php echo $remessa['qtd_entregue']; ?>, <?php echo $remessa['quantidade']; ?>, <?php echo htmlspecialchars(json_encode($remessa['__collection'] ?? 'remessas'), ENT_QUOTES, 'UTF-8'); ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 hover:border-stone-900 bg-white flex items-center justify-center text-stone-500 hover:text-stone-900 transition-colors cursor-pointer" title="Registrar Entregas">
                                                     <span class="text-xs font-bold">+</span>
                                                 </button>
                                             <?php endif; ?>
@@ -1040,25 +1042,25 @@ function abreviarNome($nomeCompleto) {
                     <input type="hidden" name="action" value="update_entrega">
                     <input type="hidden" name="id" id="updateQtdId">
                     <input type="hidden" name="collection" id="updateQtdCollection">
+                    <input type="hidden" name="qtd_atual" id="updateQtdAtualHidden">
                     
                     <p class="text-stone-500 text-xs">
-                        Informe o total de peças já finalizadas e entregues para este lote.
-                        (Máximo: <span id="updateQtdMaxLabel" class="font-bold text-stone-900">0</span>)
+                        Você já entregou <span id="updateQtdAtualLabel" class="font-bold text-stone-900">0</span> de <span id="updateQtdMaxLabel" class="font-bold text-stone-900">0</span> peças.
                     </p>
 
                     <div>
-                        <label class="block text-xs font-bold text-stone-400 uppercase mb-1">Peças Entregues</label>
+                        <label class="block text-xs font-bold text-stone-400 uppercase mb-1">Quantas peças entregar agora?</label>
                         <div class="flex items-center gap-3">
-                            <input type="number" name="qtd_entregue" id="updateQtdValue" required min="0" value="0" class="flex-grow bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
-                            <!-- Botão rápido para bater o total do lote -->
-                            <button type="button" onclick="setTotalEntregasMax()" class="bg-stone-100 hover:bg-stone-200 text-stone-800 border border-stone-300 px-3 py-3 rounded-xl text-xs font-bold transition-colors cursor-pointer">
-                                Total Lote
+                            <input type="number" name="qtd_adicionar" id="updateQtdAdicionar" required min="1" value="1" class="flex-grow bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:outline-none focus:border-stone-900">
+                            <!-- Botão rápido para completar o lote -->
+                            <button type="button" onclick="setQtdRestante()" class="bg-stone-100 hover:bg-stone-200 text-stone-800 border border-stone-300 px-3 py-3 rounded-xl text-xs font-bold transition-colors cursor-pointer">
+                                Restante
                             </button>
                         </div>
                     </div>
 
                     <button type="submit" class="w-full bg-stone-950 hover:bg-stone-850 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-md active:scale-95 cursor-pointer">
-                        Enviar Alterações
+                        Confirmar Entrega
                     </button>
                 </form>
             </div>
@@ -1089,19 +1091,31 @@ function abreviarNome($nomeCompleto) {
 
         // Abre o modal de registrar entrega e define os limites
         let maxLoteAtual = 0;
+        let entreguesAtualmente = 0;
+
         function openUpdateQtd(id, currentQtd, maxQtd, collection) {
             maxLoteAtual = maxQtd;
+            entreguesAtualmente = currentQtd;
+
             document.getElementById('updateQtdId').value = id;
             document.getElementById('updateQtdCollection').value = collection || 'remessas';
-            document.getElementById('updateQtdValue').value = currentQtd;
-            document.getElementById('updateQtdValue').setAttribute('max', maxQtd);
+            document.getElementById('updateQtdAtualHidden').value = currentQtd;
+            
+            document.getElementById('updateQtdAtualLabel').innerText = currentQtd;
             document.getElementById('updateQtdMaxLabel').innerText = maxQtd;
+            
+            // Sugere adicionar o que falta por padrão, ou pelo menos 1
+            const falta = maxQtd - currentQtd;
+            document.getElementById('updateQtdAdicionar').value = falta > 0 ? 1 : 0;
+            document.getElementById('updateQtdAdicionar').setAttribute('max', falta);
+            
             toggleModal('modalUpdateQtd');
         }
 
-        // Preenche o campo de entregas com a capacidade máxima do lote
-        function setTotalEntregasMax() {
-            document.getElementById('updateQtdValue').value = maxLoteAtual;
+        // Preenche o campo de adicionar com o que falta para completar o lote
+        function setQtdRestante() {
+            const falta = maxLoteAtual - entreguesAtualmente;
+            document.getElementById('updateQtdAdicionar').value = falta;
         }
 
         // Abre o modal de edição completa da remessa
