@@ -432,14 +432,10 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
         return [];
     }
 
-    $collectionStart = new DateTime(substr($startDate, 0, 7) . '-01');
-    $collectionStart->modify('-1 month');
-    $collectionEnd = new DateTime(substr($endDate, 0, 7) . '-01');
-    $collectionEnd->modify('+1 month');
     $userCollections = firestore_build_monthly_collection_names_for_range(
         $userUid,
-        $collectionStart->format('Y-m-d'),
-        $collectionEnd->format('Y-m-d')
+        $startDate,
+        $endDate
     );
 
     foreach ($userCollections as $col) {
@@ -486,9 +482,10 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
 
     // Normalizar campos comuns entre diferentes formatos de documento
     foreach ($results as &$r) {
-        // data_cadastro: aceita 'data', 'data_cadastro', 'data_entrega', 'data_entrada'
+        // data_cadastro: aceita 'data', 'data_cadastro', 'data_entrada', 'data_entrega'
         if (empty($r['data_cadastro'])) {
-            $candidates = [$r['data'] ?? null, $r['data_entrega'] ?? null, $r['data_entrada'] ?? null, $r['data_ultima_entrega'] ?? null];
+            // Priorizamos 'data' e 'data_entrada' (registro) sobre 'data_entrega' (conclusão)
+            $candidates = [$r['data'] ?? null, $r['data_entrada'] ?? null, $r['data_entrega'] ?? null, $r['data_ultima_entrega'] ?? null];
             foreach ($candidates as $cand) {
                 if (is_string($cand) && strpos($cand, 'T') !== false) {
                     $r['data_cadastro'] = substr($cand, 0, 10);
