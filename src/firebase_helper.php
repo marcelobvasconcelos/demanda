@@ -363,6 +363,11 @@ function firestore_build_fields(array $data): array
             $fields[$key] = ['booleanValue' => $value];
         } elseif ($value === null) {
             $fields[$key] = ['nullValue' => null];
+        } elseif (is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?/', $value)) {
+            // Se for uma string de data (ISO 8601), converte para Timestamp real do Firestore
+            // O Firestore espera o formato: 2024-05-24T15:30:00Z ou 2024-05-24T15:30:00.000Z
+            $dt = new DateTime($value);
+            $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s\Z')];
         } else {
             $fields[$key] = ['stringValue' => (string) $value];
         }
