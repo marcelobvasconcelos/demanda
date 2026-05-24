@@ -387,7 +387,7 @@ function firestore_build_monthly_collection_name(string $userUid, string $date):
     $mes = $dt->format('m');
     $ano = $dt->format('Y');
     $monthName = $meses[$mes] ?? strtolower($dt->format('F'));
-    return $monthName . '-' . $ano . '-' . $userUid;
+    return $monthName . '-' . $ano . $userUid;
 }
 
 function firestore_build_monthly_collection_names_for_range(string $userUid, string $startDate, string $endDate): array
@@ -410,7 +410,7 @@ function firestore_collection_belongs_to_user(string $collection, string $userUi
         return false;
     }
 
-    return strpos($collection, '-' . $userUid) !== false;
+    return str_ends_with($collection, $userUid);
 }
 
 function firestore_get_user_uid_by_email(string $email): ?string
