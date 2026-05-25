@@ -666,6 +666,70 @@ function firestore_update_remessa_entrega(string $docId, int $qtdEntregue, ?stri
     return firestore_update_remessa($docId, $data, $collection);
 }
 
+function firestore_get_all_user_remessas(string $usuarioEmail): array
+{
+    $usuarioEmail = trim(strtolower($usuarioEmail));
+    if ($usuarioEmail === '') {
+        return [];
+    }
+
+    $userUid = firestore_get_user_uid_by_email($usuarioEmail);
+    if (!$userUid) {
+        return [];
+    }
+
+    $allRemessas = [];
+    $serviceAccount = firestore_get_credentials();
+    $parent = 'projects/' . $serviceAccount['project_id'] . '/databases/(default)/documents';
+    
+    try {
+        // Lista todas as coleções do banco
+        $resp = firestore_request('POST', 'documents:listCollectionIds', ['parent' => $parent, 'pageSize' => 500]);
+        $collections = $resp['collectionIds'] ?? [];
+        
+        foreach ($collections as $col) {
+            // Filtra coleções que pertencem a este usuário (padrão mes-anoUID)
+            if (str_ends_with($col, $userUid)) {
+                try {
+                    $docs = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
+                    foreach (($docs['documents'] ?? []) as $d) {
+                        $doc = firestore_document_to_array($d);
+                        $docUid = $doc['usuario_uid'] ?? null;
+                        $docEmail = isset($doc['usuario_email']) ? strtolower(trim($doc['usuario_email'])) : null;
+
+                        if (($docUid && $docUid !== $userUid) || ($docEmail && $docEmail !== $usuarioEmail)) {
+                            continue;
+                        }
+
+                        $doc['id'] = firestore_document_id_from_name($d['name'] ?? '');
+                        $doc['__collection'] = $col;
+                        
+                        // Normalização básica para listagem
+                        if (empty($doc['data_cadastro'])) {
+                            $candidates = [$doc['data'] ?? null, $doc['data_entrada'] ?? null, $doc['data_entrega'] ?? null];
+                            foreach ($candidates as $cand) {
+                                if (is_string($cand) && $cand !== '') {
+                                    $doc['data_cadastro'] = substr($cand, 0, 10);
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        $allRemessas[] = $doc;
+                    }
+                } catch (Throwable $e) { continue; }
+            }
+        }
+    } catch (Throwable $e) { return []; }
+
+    // Ordenar por data desc
+    usort($allRemessas, function ($a, $b) {
+        return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? '');
+    });
+
+    return $allRemessas;
+}
+
 function firestore_delete_document(string $collection, string $docId): bool
 {
     firestore_request('DELETE', 'documents/' . rawurlencode($collection) . '/' . rawurlencode($docId));
