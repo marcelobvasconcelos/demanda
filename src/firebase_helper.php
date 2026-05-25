@@ -150,7 +150,7 @@ function firestore_http_post(string $url, string $body, array $headers = []): ar
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
     $result = curl_exec($ch);
     $error = curl_error($ch);
-    curl_close($ch);
+    $closeRes = curl_close($ch);
 
     if ($result === false) {
         throw new RuntimeException('Erro CURL ao acessar ' . $url . ': ' . $error);
@@ -355,21 +355,30 @@ function firestore_build_fields(array $data): array
 {
     $fields = [];
     foreach ($data as $key => $value) {
+        // Suporte explícito para Timestamps via wrapper
+        if (is_array($value) && isset($value['__timestamp'])) {
+            try {
+                $dt = new DateTime($value['__timestamp']);
+                $dt->setTimezone(new DateTimeZone('UTC'));
+                $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s\Z')];
+            } catch (Throwable $e) {
+                $fields[$key] = ['stringValue' => (string)$value['__timestamp']];
+            }
+            continue;
+        }
+
         if (is_int($value)) {
-            $fields[$key] = ['integerValue' => $value];
+            // A API REST do Firestore exige que integerValue seja uma STRING
+            $fields[$key] = ['integerValue' => (string)$value];
         } elseif (is_float($value)) {
-            $fields[$key] = ['doubleValue' => $value];
+            $fields[$key] = ['doubleValue' => (float)$value];
         } elseif (is_bool($value)) {
-            $fields[$key] = ['booleanValue' => $value];
+            $fields[$key] = ['booleanValue' => (bool)$value];
         } elseif ($value === null) {
             $fields[$key] = ['nullValue' => null];
-        } elseif (is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?/', $value)) {
-            // Se for uma string de data (ISO 8601), converte para Timestamp real do Firestore
-            // O Firestore espera o formato: 2024-05-24T15:30:00Z ou 2024-05-24T15:30:00.000Z
-            $dt = new DateTime($value);
-            $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s\Z')];
         } else {
-            $fields[$key] = ['stringValue' => (string) $value];
+            // Por padrão, salva tudo como String para manter compatibilidade com o app Android
+            $fields[$key] = ['stringValue' => (string)$value];
         }
     }
     return $fields;
@@ -448,13 +457,16 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
             $docs = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
             foreach (($docs['documents'] ?? []) as $d) {
                 $doc = firestore_document_to_array($d);
-                $docUid = $doc['usuario_uid'] ?? null;
+                $docUid = $doc['usuario_uid'] ?? $doc['usuario_id'] ?? null;
                 $docEmail = isset($doc['usuario_email']) ? strtolower(trim($doc['usuario_email'])) : null;
 
                 if (($docUid && $docUid !== $userUid) || ($docEmail && $docEmail !== $usuarioEmail)) {
                     continue;
                 }
 
+                $doc['id'] = firestore_document_id_from_name($d['name'] ?? '');
+                $doc['__collection'] = $col;
+                
                 $response[] = ['document' => $d, 'collection' => $col];
             }
         } catch (Throwable $e) {
@@ -493,8 +505,7 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
             $candidates = [$r['data'] ?? null, $r['data_entrada'] ?? null, $r['data_entrega'] ?? null, $r['data_ultima_entrega'] ?? null];
             foreach ($candidates as $cand) {
                 if (is_string($cand) && $cand !== '') {
-                    // Se tiver 'T', pega só a data. Se não tiver, assume que já é a data ou tenta extrair
-                    $r['data_cadastro'] = (strpos($cand, 'T') !== false) ? substr($cand, 0, 10) : substr($cand, 0, 10);
+                    $r['data_cadastro'] = substr($cand, 0, 10);
                     if (preg_match('/^\d{4}-\d{2}-\d{2}/', $r['data_cadastro'])) {
                         break;
                     }
@@ -518,9 +529,7 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
         $r['qtd_entregue'] = max(0, min(intval($r['qtd_entregue'] ?? 0), $r['quantidade']));
 
         if (empty($r['data_ultima_entrega']) && !empty($r['data_entrega'])) {
-            $r['data_ultima_entrega'] = is_string($r['data_entrega']) && strpos($r['data_entrega'], 'T') !== false
-                ? substr($r['data_entrega'], 0, 10)
-                : $r['data_entrega'];
+            $r['data_ultima_entrega'] = is_string($r['data_entrega']) ? substr($r['data_entrega'], 0, 10) : $r['data_entrega'];
         }
 
         // preco_unitario
@@ -544,23 +553,25 @@ function firestore_query_remessas(string $usuarioEmail, string $startDate, strin
         @file_put_contents(__DIR__ . '/logs/firestore_query_docs.json', json_encode(['ts' => date('c'), 'docs' => $results], JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
     } catch (Throwable $e) {}
 
-    // Ordenar por data desc (mesmo que a data seja de outro mês, mantemos na lista do mês da coleção)
+    // Ordenar por data desc
     usort($results, function ($a, $b) {
         return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? '');
     });
-
-    try {
-        @file_put_contents(__DIR__ . '/logs/firestore_query_filtered.json', json_encode(['ts' => date('c'), 'results_count' => count($results), 'results' => array_values($results)], JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
-    } catch (Throwable $e) {}
 
     return array_values($results);
 }
 
 function firestore_add_remessa(array $data): array
 {
-    $docId = bin2hex(random_bytes(8));
+    // Gera ID similar ao padrão do Firestore (20 chars base62)
+    $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    $docId = '';
+    for ($i = 0; $i < 20; $i++) {
+        $docId .= $chars[rand(0, strlen($chars) - 1)];
+    }
+
     $usuarioUid = $data['usuario_uid'] ?? null;
-    $dataCadastro = $data['data_cadastro'] ?? date('Y-m-d');
+    $dataCadastro = $data['data_cadastro'] ?? date('Y-m-d\TH:i:s');
     if (!$usuarioUid) {
         $usuarioUid = firestore_get_user_uid_by_email(strtolower(trim($data['usuario_email'] ?? '')));
     }
@@ -571,25 +582,42 @@ function firestore_add_remessa(array $data): array
         $collection = 'remessas';
     }
 
-    $fields = firestore_build_fields([
+    // Prepara campos com duplicidade para compatibilidade TOTAL (String + Timestamp + Nomes variados)
+    $fieldsData = [
+        'id' => $docId,
         'usuario_uid' => $usuarioUid,
+        'usuario_id' => $usuarioUid, // Compatibilidade
         'usuario_email' => strtolower(trim($data['usuario_email'] ?? '')),
         'usuario_nome' => $data['usuario_nome'] ?? '',
         'peca_servico' => $data['peca_servico'] ?? '',
         'peca' => $data['peca_servico'] ?? '', // Compatibilidade
         'preco_unitario' => isset($data['preco_unitario']) ? floatval($data['preco_unitario']) : 0.0,
         'quantidade' => isset($data['quantidade']) ? intval($data['quantidade']) : 1,
-        'qtd' => isset($data['quantidade']) ? intval($data['quantidade']) : 1, // Compatibilidade (Total)
+        'qtd' => isset($data['quantidade']) ? intval($data['quantidade']) : 1, // Compatibilidade
         'tamanho' => $data['tamanho'] ?? 'outro',
         'size' => $data['tamanho'] ?? 'outro', // Compatibilidade
         'qtd_entregue' => isset($data['qtd_entregue']) ? intval($data['qtd_entregue']) : 0,
         'entregue' => isset($data['qtd_entregue']) ? intval($data['qtd_entregue']) : 0, // Compatibilidade
         'valor_recebido' => isset($data['valor_recebido']) ? floatval($data['valor_recebido']) : 0.0,
+        'loja_id' => $data['loja_id'] ?? '',
+        'loja_nome' => $data['loja_nome'] ?? '',
+        
+        // Versões em STRING (para o app atual e queries)
         'data_cadastro' => $dataCadastro,
-        'data' => $dataCadastro, // Compatibilidade
-        'data_ultima_entrega' => $data['data_ultima_entrega'] ?? null,
-        'data_entrega' => $data['data_ultima_entrega'] ?? null, // Compatibilidade
-    ]);
+        'data' => $dataCadastro,
+        
+        // Versões em TIMESTAMP (para o futuro e requisição do usuário)
+        'timestamp' => ['__timestamp' => $dataCadastro],
+        'data_timestamp' => ['__timestamp' => $dataCadastro],
+    ];
+
+    if (!empty($data['data_ultima_entrega'])) {
+        $fieldsData['data_ultima_entrega'] = $data['data_ultima_entrega'];
+        $fieldsData['data_entrega'] = $data['data_ultima_entrega'];
+        $fieldsData['entrega_timestamp'] = ['__timestamp' => $data['data_ultima_entrega']];
+    }
+
+    $fields = firestore_build_fields($fieldsData);
 
     firestore_request('POST', 'documents/' . rawurlencode($collection) . '?documentId=' . rawurlencode($docId), ['fields' => $fields]);
     return ['id' => $docId, '__collection' => $collection] + $data;
@@ -606,7 +634,7 @@ function firestore_update_remessa(string $docId, array $data, ?string $collectio
 
     if (isset($data['peca_servico'])) {
         $updateFields['peca_servico'] = $data['peca_servico'];
-        $updateFields['peca'] = $data['peca_servico']; // Compatibilidade
+        $updateFields['peca'] = $data['peca_servico']; 
         $mask[] = 'updateMask.fieldPaths=peca_servico';
         $mask[] = 'updateMask.fieldPaths=peca';
     }
@@ -616,19 +644,19 @@ function firestore_update_remessa(string $docId, array $data, ?string $collectio
     }
     if (isset($data['quantidade'])) {
         $updateFields['quantidade'] = intval($data['quantidade']);
-        $updateFields['qtd'] = intval($data['quantidade']); // Compatibilidade (Total)
+        $updateFields['qtd'] = intval($data['quantidade']); 
         $mask[] = 'updateMask.fieldPaths=quantidade';
         $mask[] = 'updateMask.fieldPaths=qtd';
     }
     if (isset($data['tamanho'])) {
         $updateFields['tamanho'] = $data['tamanho'];
-        $updateFields['size'] = $data['tamanho']; // Compatibilidade
+        $updateFields['size'] = $data['tamanho']; 
         $mask[] = 'updateMask.fieldPaths=tamanho';
         $mask[] = 'updateMask.fieldPaths=size';
     }
     if (isset($data['qtd_entregue'])) {
         $updateFields['qtd_entregue'] = intval($data['qtd_entregue']);
-        $updateFields['entregue'] = intval($data['qtd_entregue']); // Compatibilidade
+        $updateFields['entregue'] = intval($data['qtd_entregue']); 
         $mask[] = 'updateMask.fieldPaths=qtd_entregue';
         $mask[] = 'updateMask.fieldPaths=entregue';
     }
@@ -637,10 +665,16 @@ function firestore_update_remessa(string $docId, array $data, ?string $collectio
         $mask[] = 'updateMask.fieldPaths=valor_recebido';
     }
     if (array_key_exists('data_ultima_entrega', $data)) {
-        $updateFields['data_ultima_entrega'] = $data['data_ultima_entrega'];
-        $updateFields['data_entrega'] = $data['data_ultima_entrega']; // Compatibilidade
+        $val = $data['data_ultima_entrega'];
+        $updateFields['data_ultima_entrega'] = $val;
+        $updateFields['data_entrega'] = $val;
         $mask[] = 'updateMask.fieldPaths=data_ultima_entrega';
         $mask[] = 'updateMask.fieldPaths=data_entrega';
+        
+        if ($val) {
+            $updateFields['entrega_timestamp'] = ['__timestamp' => $val];
+            $mask[] = 'updateMask.fieldPaths=entrega_timestamp';
+        }
     }
 
     if (empty($updateFields)) {
@@ -694,7 +728,7 @@ function firestore_get_all_user_remessas(string $usuarioEmail): array
                     $docs = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
                     foreach (($docs['documents'] ?? []) as $d) {
                         $doc = firestore_document_to_array($d);
-                        $docUid = $doc['usuario_uid'] ?? null;
+                        $docUid = $doc['usuario_uid'] ?? $doc['usuario_id'] ?? null;
                         $docEmail = isset($doc['usuario_email']) ? strtolower(trim($doc['usuario_email'])) : null;
 
                         if (($docUid && $docUid !== $userUid) || ($docEmail && $docEmail !== $usuarioEmail)) {
@@ -703,17 +737,6 @@ function firestore_get_all_user_remessas(string $usuarioEmail): array
 
                         $doc['id'] = firestore_document_id_from_name($d['name'] ?? '');
                         $doc['__collection'] = $col;
-                        
-                        // Normalização básica para listagem
-                        if (empty($doc['data_cadastro'])) {
-                            $candidates = [$doc['data'] ?? null, $doc['data_entrada'] ?? null, $doc['data_entrega'] ?? null];
-                            foreach ($candidates as $cand) {
-                                if (is_string($cand) && $cand !== '') {
-                                    $doc['data_cadastro'] = substr($cand, 0, 10);
-                                    break;
-                                }
-                            }
-                        }
                         
                         $allRemessas[] = $doc;
                     }
