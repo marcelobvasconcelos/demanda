@@ -282,7 +282,8 @@ function firestore_query_remessas(string $email, string $startDate, string $endD
         $results = [];
         foreach (($resp['documents'] ?? []) as $d) {
             $doc = firestore_document_to_array($d);
-            $doc['id'] = end(explode('/', $d['name']));
+            $nameParts = explode('/', $d['name']);
+            $doc['id'] = end($nameParts);
             $doc['__collection'] = $col;
             
             // Normalização para o Dashboard
@@ -314,7 +315,8 @@ function firestore_get_all_user_remessas(string $email): array
                     $dresp = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
                     foreach (($dresp['documents'] ?? []) as $d) {
                         $doc = firestore_document_to_array($d);
-                        $doc['id'] = end(explode('/', $d['name']));
+                        $nameParts = explode('/', $d['name']);
+            $doc['id'] = end($nameParts);
                         $doc['__collection'] = $col;
                         if (empty($doc['data_cadastro'])) {
                             $cand = $doc['data'] ?? $doc['data_entrada'] ?? $doc['data_entrega'] ?? null;
