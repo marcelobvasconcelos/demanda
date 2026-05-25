@@ -58,7 +58,7 @@ if ($dbConnected && $pdo) {
     $lojas = $pdo->query("SELECT id, nome FROM lojas ORDER BY nome ASC")->fetchAll();
 }
 
-// Lógica de Abas e Filtros (Atualizado com correções de campos)
+// Lógica de Abas e Filtros
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'remessas';
 
 // Filtro de Mês/Ano
@@ -320,6 +320,12 @@ function abreviarNome($n) {
                                 <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qtd; ?>, <?php echo $prUnit; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
                                 <button onclick="openUpdateQtd('<?php echo $r['id']; ?>', <?php echo $ent; ?>, <?php echo $qtd; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $rec; ?>, <?php echo $prUnit; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 text-stone-600 flex items-center justify-center font-bold text-xs hover:bg-stone-50 cursor-pointer"><?php echo $perc >= 100 ? '<i data-lucide="check" class="w-4 h-4"></i>' : '+'; ?></button>
                                 <button onclick='openEditRemessa(<?php echo json_encode($r); ?>)' class="p-1.5 text-stone-400 hover:text-stone-900"><i data-lucide="pencil" class="w-4 h-4"></i></button>
+                                <form method="POST" onsubmit="return confirm('Deseja realmente excluir este lote?');" class="inline">
+                                    <input type="hidden" name="action" value="delete_remessa">
+                                    <input type="hidden" name="id" value="<?php echo $r['id']; ?>">
+                                    <input type="hidden" name="collection" value="<?php echo $r['__collection'] ?? 'remessas'; ?>">
+                                    <button type="submit" class="p-1.5 text-stone-300 hover:text-rose-600 cursor-pointer transition-colors" title="Excluir"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                </form>
                             </div>
                         </div>
                         <div class="flex items-center justify-between mb-4 text-[10px] font-bold uppercase">
@@ -394,7 +400,40 @@ function abreviarNome($n) {
     </main>
 
     <!-- Modais -->
-    <div id="modalAddRemessa" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen px-4"><div class="fixed inset-0 bg-stone-950/40" onclick="toggleModal('modalAddRemessa')"></div><div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-md w-full border border-stone-200"><div class="bg-stone-900 text-white p-6 flex justify-between items-center"><h3 class="font-serif text-xl font-bold flex items-center gap-2"><i data-lucide="plus-circle" class="w-5 h-5 text-atelier-brand"></i> Cadastro</h3><button onclick="toggleModal('modalAddRemessa')"><i data-lucide="x" class="w-6 h-6"></i></button></div><form method="POST" class="p-6 space-y-4"><input type="hidden" name="action" value="add_remessa"><input type="text" name="peca_servico" required placeholder="Peça/Serviço" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none"><div class="grid grid-cols-2 gap-4"><input type="number" step="0.01" name="preco_unitario" required placeholder="Preço (R$)" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none"><input type="number" name="quantidade" required placeholder="Qtd" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none"></div><div class="flex flex-wrap gap-2 justify-center py-2 bg-stone-50 rounded-2xl border border-stone-200"><?php foreach (['PP','P','M','G','GG','XG','outro'] as $t): ?><label class="flex flex-col items-center gap-1 px-3 py-2 border border-stone-200 rounded-xl cursor-pointer hover:bg-white transition-all text-xs font-bold"><input type="radio" name="tamanho" value="<?php echo $t; ?>" <?php echo $t==='M'?'checked':''; ?>><?php echo $t; ?></label><?php endforeach; ?></div><select name="loja_id" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none"><option value="">Particular</option><?php foreach ($lojas as $l): ?><option value="<?php echo $l['id']; ?>"><?php echo htmlspecialchars($l['nome']); ?></option><?php endforeach; ?></select><button type="submit" class="w-full bg-stone-950 text-white font-bold py-3.5 rounded-xl text-sm transition-all active:scale-95 cursor-pointer">Salvar</button></form></div></div></div>
+    <div id="modalAddRemessa" class="fixed inset-0 z-50 overflow-y-auto hidden">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-stone-950/40" onclick="toggleModal('modalAddRemessa')"></div>
+            <div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-md w-full border border-stone-200">
+                <div class="bg-stone-900 text-white p-6 flex justify-between items-center">
+                    <h3 class="font-serif text-xl font-bold flex items-center gap-2"><i data-lucide="plus-circle" class="w-5 h-5 text-atelier-brand"></i> Cadastro</h3>
+                    <button onclick="toggleModal('modalAddRemessa')" class="text-stone-400 hover:text-white"><i data-lucide="x" class="w-6 h-6"></i></button>
+                </div>
+                <form method="POST" class="p-6 space-y-4">
+                    <input type="hidden" name="action" value="add_remessa">
+                    <input type="text" name="peca_servico" required placeholder="Peça/Serviço" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none">
+                    <div class="grid grid-cols-2 gap-4">
+                        <input type="number" step="0.01" name="preco_unitario" required placeholder="Preço (R$)" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none">
+                        <input type="number" name="quantidade" required placeholder="Qtd" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none">
+                    </div>
+                    <div class="flex flex-wrap gap-2 justify-center py-2 bg-stone-50 rounded-2xl border border-stone-200">
+                        <?php foreach (['PP','P','M','G','GG','XG','outro'] as $t): ?>
+                            <label class="flex flex-col items-center gap-1 px-3 py-2 border border-stone-200 rounded-xl cursor-pointer hover:bg-white transition-all text-xs font-bold">
+                                <input type="radio" name="tamanho" value="<?php echo $t; ?>" <?php echo $t==='M'?'checked':''; ?>>
+                                <span><?php echo $t; ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                    <select name="loja_id" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none">
+                        <option value="">Particular</option>
+                        <?php foreach ($lojas as $l): ?>
+                            <option value="<?php echo $l['id']; ?>"><?php echo htmlspecialchars($l['nome']); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="submit" class="w-full bg-stone-950 text-white font-bold py-3.5 rounded-xl text-sm transition-all active:scale-95 cursor-pointer">Salvar</button>
+                </form>
+            </div>
+        </div>
+    </div>
 
     <div id="modalUpdateQtd" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen px-4"><div class="fixed inset-0 bg-stone-950/40" onclick="toggleModal('modalUpdateQtd')"></div><div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-sm w-full border border-stone-200"><div class="bg-stone-900 text-white p-5 flex justify-between items-center"><h3 class="font-serif text-lg font-bold">Registrar Entregas</h3><button onclick="toggleModal('modalUpdateQtd')"><i data-lucide="x" class="w-5 h-5"></i></button></div><form method="POST" class="p-6 space-y-4"><input type="hidden" name="action" value="update_entrega"><input type="hidden" name="id" id="updateQtdId"><input type="hidden" name="collection" id="updateQtdCollection"><input type="hidden" name="qtd_atual" id="updateQtdAtualHidden"><input type="hidden" name="valor_recebido_atual" id="updateValorRecebidoAtualHidden"><p class="text-stone-500 text-xs">Entregou <span id="updateQtdAtualLabel" class="font-bold text-stone-900">0</span> de <span id="updateQtdMaxLabel" class="font-bold text-stone-900">0</span>. Faltam: <span id="updateQtdFaltaLabel" class="font-bold text-rose-600">0</span>.</p><div class="flex items-center gap-3"><input type="number" name="qtd_adicionar" id="updateQtdAdicionar" required value="1" class="flex-grow bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none"><button type="button" onclick="setQtdRestante()" class="bg-stone-100 px-3 py-3 rounded-xl text-xs font-bold border border-stone-300 cursor-pointer">Tudo</button></div><div class="space-y-1"><label class="text-[10px] font-bold text-stone-400 uppercase">Receber Agora (R$)</label><input type="number" step="0.01" name="valor_recebido_agora" id="updateValorRecebidoAgora" placeholder="0,00" class="w-full bg-stone-50 border border-stone-300 rounded-xl p-3 text-sm focus:border-stone-900 outline-none"><p class="text-[10px] text-stone-400 mt-1">Rec: <span id="updateValorRecebidoLabel" class="font-bold">R$ 0,00</span> / Pend: <span id="updateValorPendenteLabel" class="font-bold text-rose-500">R$ 0,00</span></p></div><button type="submit" class="w-full bg-stone-950 text-white font-bold py-3.5 rounded-xl text-sm transition-all active:scale-95 cursor-pointer">Confirmar</button></form></div></div></div>
 
