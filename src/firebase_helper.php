@@ -146,12 +146,14 @@ function firestore_request(string $method, string $path, array $body = null): ar
     curl_close($ch);
 
     if ($result === false) {
-        throw new RuntimeException('Erro CURL Firestore.');
+        throw new RuntimeException('Erro de rede ao acessar o Firestore.');
     }
 
     $decoded = json_decode($result, true);
     if ($httpCode >= 400) {
-        throw new RuntimeException('Erro Firestore ' . $httpCode . ': ' . ($decoded['error']['message'] ?? $result));
+        $msg = $decoded['error']['message'] ?? $result;
+        if (strpos($msg, 'quota') !== false) $msg = 'Limite de acesso ao Firebase atingido. Tente novamente em alguns minutos.';
+        throw new RuntimeException($msg);
     }
 
     return $decoded ?: [];
@@ -185,7 +187,8 @@ function firebase_auth_request(string $method, string $path, array $body = null)
 
     $decoded = json_decode($result, true);
     if ($httpCode >= 400) {
-        throw new RuntimeException('Erro Auth ' . $httpCode . ': ' . ($decoded['error']['message'] ?? $result));
+        $msg = $decoded['error']['message'] ?? $result;
+        throw new RuntimeException($msg);
     }
 
     return $decoded ?: [];
@@ -207,22 +210,10 @@ function firebase_auth_sign_in_with_password(string $email, string $password): a
     } catch (Throwable $e) {
         $message = $e->getMessage();
         $errorMsg = 'Erro ao realizar login.';
-        
-        if (strpos($message, 'INVALID_PASSWORD') !== false) {
-            $errorMsg = 'Senha incorreta. Por favor, tente novamente.';
-        } elseif (strpos($message, 'EMAIL_NOT_FOUND') !== false) {
-            $errorMsg = 'E-mail não encontrado.';
-        } elseif (strpos($message, 'USER_DISABLED') !== false) {
-            $errorMsg = 'Esta conta foi desativada.';
-        } elseif (strpos($message, 'TOO_MANY_ATTEMPTS_TRY_LATER') !== false) {
-            $errorMsg = 'Muitas tentativas bloqueadas. Tente mais tarde ou recupere sua senha.';
-        }
-        
-        return [
-            'success' => false,
-            'data' => null,
-            'error' => $errorMsg
-        ];
+        if (strpos($message, 'INVALID_PASSWORD') !== false) $errorMsg = 'Senha incorreta.';
+        elseif (strpos($message, 'EMAIL_NOT_FOUND') !== false) $errorMsg = 'E-mail não cadastrado.';
+        elseif (strpos($message, 'TOO_MANY_ATTEMPTS') !== false) $errorMsg = 'Muitas tentativas bloqueadas. Tente mais tarde.';
+        return ['success' => false, 'data' => null, 'error' => $errorMsg];
     }
 }
 
@@ -234,9 +225,7 @@ function firebase_auth_send_password_reset_email(string $email): bool
             'email' => trim(strtolower($email))
         ]);
         return true;
-    } catch (Throwable $e) {
-        return false;
-    }
+    } catch (Throwable $e) { return false; }
 }
 
 function firestore_parse_value(array $value)
@@ -266,28 +255,19 @@ function firestore_build_fields(array $data): array
 {
     $fields = [];
     foreach ($data as $key => $value) {
-        // Suporte explícito para Timestamp
         if (is_array($value) && isset($value['__timestamp'])) {
             try {
                 $dt = new DateTime($value['__timestamp']);
                 $dt->setTimezone(new DateTimeZone('UTC'));
-                $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s\Z')];
+                $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s.v\Z')];
             } catch (Throwable $e) { $fields[$key] = ['stringValue' => (string)$value['__timestamp']]; }
             continue;
         }
-
-        if (is_int($value)) {
-            // Firestore REST exige string para int64
-            $fields[$key] = ['integerValue' => (string)$value];
-        } elseif (is_float($value)) {
-            $fields[$key] = ['doubleValue' => (float)$value];
-        } elseif (is_bool($value)) {
-            $fields[$key] = ['booleanValue' => (bool)$value];
-        } elseif ($value === null) {
-            $fields[$key] = ['nullValue' => null];
-        } else {
-            $fields[$key] = ['stringValue' => (string)$value];
-        }
+        if (is_int($value)) $fields[$key] = ['integerValue' => (string)$value];
+        elseif (is_float($value)) $fields[$key] = ['doubleValue' => (float)$value];
+        elseif (is_bool($value)) $fields[$key] = ['booleanValue' => (bool)$value];
+        elseif ($value === null) $fields[$key] = ['nullValue' => null];
+        else $fields[$key] = ['stringValue' => (string)$value];
     }
     return $fields;
 }
@@ -299,21 +279,16 @@ function firestore_build_monthly_collection_name(string $userUid, string $date):
     return ($meses[$dt->format('m')] ?? 'janeiro') . '-' . $dt->format('Y') . $userUid;
 }
 
-function firestore_get_user_uid_by_email(string $email): ?string
+function firestore_get_user_uid_by_email(string $email): string
 {
-    try {
-        $response = firebase_auth_request('POST', 'accounts:lookup', ['email' => [trim(strtolower($email))]]);
-        return $response['users'][0]['localId'] ?? null;
-    } catch (Throwable $e) { return null; }
+    $response = firebase_auth_request('POST', 'accounts:lookup', ['email' => [trim(strtolower($email))]]);
+    if (empty($response['users'][0]['localId'])) throw new RuntimeException('Usuário não encontrado no Firebase.');
+    return $response['users'][0]['localId'];
 }
 
 function firestore_query_remessas(string $email, string $startDate, string $endDate, ?string $uid = null): array
 {
-    if (!$uid) {
-        $uid = firestore_get_user_uid_by_email($email);
-    }
-    if (!$uid) return [];
-
+    if (!$uid) $uid = firestore_get_user_uid_by_email($email);
     $dt = new DateTime($startDate);
     $col = firestore_build_monthly_collection_name($uid, $dt->format('Y-m-d'));
     
@@ -322,11 +297,9 @@ function firestore_query_remessas(string $email, string $startDate, string $endD
         $results = [];
         foreach (($resp['documents'] ?? []) as $d) {
             $doc = firestore_document_to_array($d);
-            $nameParts = explode('/', $d['name']);
-            $doc['id'] = end($nameParts);
+            $parts = explode('/', $d['name']);
+            $doc['id'] = end($parts);
             $doc['__collection'] = $col;
-            
-            // Normalização para o Dashboard
             if (empty($doc['data_cadastro'])) {
                 $cand = $doc['data'] ?? $doc['data_entrada'] ?? $doc['data_entrega'] ?? null;
                 if ($cand) $doc['data_cadastro'] = substr($cand, 0, 10);
@@ -335,48 +308,49 @@ function firestore_query_remessas(string $email, string $startDate, string $endD
         }
         usort($results, function($a, $b) { return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? ''); });
         return $results;
-    } catch (Throwable $e) { return []; }
+    } catch (Throwable $e) {
+        if (strpos($e->getMessage(), '404') !== false) return [];
+        throw $e;
+    }
 }
 
 function firestore_get_all_user_remessas(string $email, ?string $uid = null): array
 {
-    if (!$uid) {
-        $uid = firestore_get_user_uid_by_email($email);
-    }
-    if (!$uid) return [];
-    
+    if (!$uid) $uid = firestore_get_user_uid_by_email($email);
     $all = [];
-    try {
-        $serviceAccount = firestore_get_credentials();
-        $parent = 'projects/' . $serviceAccount['project_id'] . '/databases/(default)/documents';
-        
-        // Otimização: Cache de IDs de coleções para evitar múltiplas chamadas pesadas
-        static $collectionsCache = null;
-        if ($collectionsCache === null) {
-            $resp = firestore_request('POST', 'documents:listCollectionIds', ['parent' => $parent, 'pageSize' => 500]);
-            $collectionsCache = $resp['collectionIds'] ?? [];
-        }
-        
-        foreach ($collectionsCache as $col) {
-            if (str_ends_with($col, $uid)) {
-                try {
-                    $dresp = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
-                    foreach (($dresp['documents'] ?? []) as $d) {
-                        $doc = firestore_document_to_array($d);
-                        $nameParts = explode('/', $d['name']);
-                        $doc['id'] = end($nameParts);
-                        $doc['__collection'] = $col;
-                        if (empty($doc['data_cadastro'])) {
-                            $cand = $doc['data'] ?? $doc['data_entrada'] ?? $doc['data_entrega'] ?? null;
-                            if ($cand) $doc['data_cadastro'] = substr($cand, 0, 10);
-                        }
-                        $all[] = $doc;
+    $serviceAccount = firestore_get_credentials();
+    $parent = 'projects/' . $serviceAccount['project_id'] . '/databases/(default)/documents';
+    
+    // Lista coleções com suporte a paginação para não perder dados
+    $collections = [];
+    $pageToken = null;
+    do {
+        $params = ['parent' => $parent, 'pageSize' => 500];
+        if ($pageToken) $params['pageToken'] = $pageToken;
+        $resp = firestore_request('POST', 'documents:listCollectionIds', $params);
+        $collections = array_merge($collections, $resp['collectionIds'] ?? []);
+        $pageToken = $resp['nextPageToken'] ?? null;
+    } while ($pageToken);
+    
+    foreach ($collections as $col) {
+        if (str_ends_with($col, $uid)) {
+            try {
+                $dresp = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
+                foreach (($dresp['documents'] ?? []) as $d) {
+                    $doc = firestore_document_to_array($d);
+                    $parts = explode('/', $d['name']);
+                    $doc['id'] = end($parts);
+                    $doc['__collection'] = $col;
+                    if (empty($doc['data_cadastro'])) {
+                        $cand = $doc['data'] ?? $doc['data_entrada'] ?? $doc['data_entrega'] ?? null;
+                        if ($cand) $doc['data_cadastro'] = substr($cand, 0, 10);
                     }
-                } catch (Throwable $e) {}
-            }
+                    $all[] = $doc;
+                }
+            } catch (Throwable $e) {}
         }
-        usort($all, function($a, $b) { return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? ''); });
-    } catch (Throwable $e) {}
+    }
+    usort($all, function($a, $b) { return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? ''); });
     return $all;
 }
 
@@ -390,20 +364,19 @@ function firestore_add_remessa(array $data): void
     $dataCad = $data['data_cadastro'] ?? date('Y-m-d\TH:i:s');
     $col = firestore_build_monthly_collection_name($uid, $dataCad);
 
-    $prUnit = floatval($data['preco_unitario'] ?? 0);
+    $prU = floatval($data['preco_unitario'] ?? 0);
     $qtd = intval($data['quantidade'] ?? 0);
 
     $fields = firestore_build_fields([
         'peca_servico' => $data['peca_servico'],
         'quantidade' => $qtd,
         'entregue' => 0,
-        'precoU' => $prUnit,
-        'total' => $prUnit * $qtd,
+        'precoU' => $prU,
+        'total' => $prU * $qtd,
         'tamanho' => $data['tamanho'] ?? '',
         'marcado' => false,
         'data' => ['__timestamp' => $dataCad],
-        // Campos extras para compatibilidade com o sistema web
-        'preco_unitario' => $prUnit,
+        'preco_unitario' => $prU,
         'qtd_entregue' => 0,
         'valor_recebido' => 0.0,
         'usuario_email' => $data['usuario_email'],
@@ -412,51 +385,28 @@ function firestore_add_remessa(array $data): void
         'usuario_id' => $uid,
         'data_cadastro' => $dataCad
     ]);
-
-    firestore_request('POST', 'documents/' . rawurlencode($col) . '?documentId=' . rawurlencode($docId), ['fields' => $fields]);
+    firestore_request('POST', 'documents/' . rawurlencode($col) . '?documentId=' . $docId, ['fields' => $fields]);
 }
 
 function firestore_update_remessa(string $docId, array $data, string $col): void
 {
-    $fields = [];
-    $mask = [];
-    
-    // Mapeamento bidirecional para compatibilidade
-    $map = [
-        'peca_servico' => 'peca_servico',
-        'quantidade' => 'quantidade',
-        'qtd' => 'quantidade',
-        'tamanho' => 'tamanho',
-        'size' => 'tamanho',
-        'qtd_entregue' => 'entregue',
-        'entregue' => 'entregue',
-        'data_ultima_entrega' => 'data_entrega',
-        'data_entrega' => 'data_entrega',
-        'preco_unitario' => 'precoU',
-        'precoU' => 'precoU'
-    ];
-
+    $fields = []; $mask = [];
+    $map = ['peca_servico'=>'peca_servico','quantidade'=>'quantidade','qtd'=>'quantidade','tamanho'=>'tamanho','size'=>'tamanho','qtd_entregue'=>'entregue','entregue'=>'entregue','data_ultima_entrega'=>'data_entrega','data_entrega'=>'data_entrega','preco_unitario'=>'precoU','precoU'=>'precoU'];
     foreach ($data as $k => $v) {
-        // Trata datas como Timestamp
         if (($k === 'data_entrega' || $k === 'data_ultima_entrega' || $k === 'data') && $v) {
             $fields[$k] = ['__timestamp' => $v];
             $mask[] = "updateMask.fieldPaths=" . $k;
             continue;
         }
-
         $fields[$k] = $v;
         $mask[] = "updateMask.fieldPaths=" . $k;
-        
-        // Espelha campos se houver mapeamento
         if (isset($map[$k]) && $map[$k] !== $k) {
             $fields[$map[$k]] = $v;
             $mask[] = "updateMask.fieldPaths=" . $map[$k];
         }
     }
-
     if (empty($fields)) return;
-    $url = 'documents/' . rawurlencode($col) . '/' . $docId . '?' . implode('&', $mask);
-    firestore_request('PATCH', $url, ['fields' => firestore_build_fields($fields)]);
+    firestore_request('PATCH', 'documents/' . rawurlencode($col) . '/' . $docId . '?' . implode('&', $mask), ['fields' => firestore_build_fields($fields)]);
 }
 
 function firestore_delete_document(string $col, string $docId): void
@@ -466,19 +416,11 @@ function firestore_delete_document(string $col, string $docId): void
 
 function firestore_update_remessa_entrega(string $docId, int $qtd, ?string $data, string $col, float $valRec): void
 {
-    $updateData = [
-        'entregue' => $qtd,
-        'qtd_entregue' => $qtd,
-        'valor_recebido' => $valRec
-    ];
-    if ($data) {
-        $updateData['data_entrega'] = $data;
-        $updateData['data_ultima_entrega'] = $data;
-    }
-    firestore_update_remessa($docId, $updateData, $col);
+    $up = ['entregue' => $qtd, 'qtd_entregue' => $qtd, 'valor_recebido' => $valRec];
+    if ($data) { $up['data_entrega'] = $data; $up['data_ultima_entrega'] = $data; }
+    firestore_update_remessa($docId, $up, $col);
 }
 
 function firestore_upsert_user(array $userData): bool { return true; }
 function firestore_sync_user_to_local(PDO $pdo, array $userData): ?array { return null; }
-
 try { $credentials = firestore_get_credentials(); } catch (Throwable $e) { $credentials = null; }
