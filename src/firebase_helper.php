@@ -233,7 +233,7 @@ function firestore_build_fields(array $data): array
             try {
                 $dt = new DateTime($value['__timestamp']);
                 $dt->setTimezone(new DateTimeZone('UTC'));
-                $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s\Z')];
+                $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s.v\Z')];
             } catch (Throwable $e) { $fields[$key] = ['stringValue' => (string)$value['__timestamp']]; }
             continue;
         }
@@ -316,7 +316,7 @@ function firestore_get_all_user_remessas(string $email): array
                     foreach (($dresp['documents'] ?? []) as $d) {
                         $doc = firestore_document_to_array($d);
                         $nameParts = explode('/', $d['name']);
-            $doc['id'] = end($nameParts);
+                        $doc['id'] = end($nameParts);
                         $doc['__collection'] = $col;
                         if (empty($doc['data_cadastro'])) {
                             $cand = $doc['data'] ?? $doc['data_entrada'] ?? $doc['data_entrega'] ?? null;
@@ -342,27 +342,25 @@ function firestore_add_remessa(array $data): void
     $dataCad = $data['data_cadastro'] ?? date('Y-m-d\TH:i:s');
     $col = firestore_build_monthly_collection_name($uid, $dataCad);
 
+    $prUnit = floatval($data['preco_unitario'] ?? 0);
+    $qtd = intval($data['quantidade'] ?? 0);
+
     $fields = firestore_build_fields([
-        'id' => $docId,
-        'usuario_uid' => $uid,
-        'usuario_id' => $uid,
+        'peca_servico' => $data['peca_servico'],
+        'quantidade' => $qtd,
+        'entregue' => 0,
+        'precoU' => $prUnit,
+        'total' => $prUnit * $qtd,
+        'tamanho' => $data['tamanho'] ?? '',
+        'marcado' => false,
+        'data' => ['__timestamp' => $dataCad],
+        // Campos extras para compatibilidade com o sistema web
+        'preco_unitario' => $prUnit,
+        'qtd_entregue' => 0,
+        'valor_recebido' => 0.0,
         'usuario_email' => $data['usuario_email'],
         'usuario_nome' => $data['usuario_nome'],
-        'peca_servico' => $data['peca_servico'],
-        'peca' => $data['peca_servico'],
-        'preco_unitario' => floatval($data['preco_unitario']),
-        'quantidade' => intval($data['quantidade']),
-        'qtd' => intval($data['quantidade']),
-        'tamanho' => $data['tamanho'],
-        'size' => $data['tamanho'],
-        'qtd_entregue' => intval($data['qtd_entregue'] ?? 0),
-        'entregue' => intval($data['qtd_entregue'] ?? 0),
-        'valor_recebido' => floatval($data['valor_recebido'] ?? 0),
-        'data_cadastro' => $dataCad,
-        'data' => $dataCad,
-        'timestamp' => ['__timestamp' => $dataCad],
-        'loja_id' => $data['loja_id'] ?? '',
-        'loja_nome' => $data['loja_nome'] ?? '',
+        'data_cadastro' => $dataCad
     ]);
 
     firestore_request('POST', 'documents/' . rawurlencode($col) . '?documentId=' . $docId, ['fields' => $fields]);
@@ -372,25 +370,37 @@ function firestore_update_remessa(string $docId, array $data, string $col): void
 {
     $fields = [];
     $mask = [];
+    
+    // Mapeamento bidirecional para compatibilidade
     $map = [
-        'peca_servico' => 'peca',
-        'quantidade' => 'qtd',
-        'tamanho' => 'size',
+        'peca_servico' => 'peca_servico',
+        'quantidade' => 'quantidade',
+        'qtd' => 'quantidade',
+        'tamanho' => 'tamanho',
+        'size' => 'tamanho',
         'qtd_entregue' => 'entregue',
-        'data_ultima_entrega' => 'data_entrega'
+        'entregue' => 'entregue',
+        'data_ultima_entrega' => 'data_entrega',
+        'data_entrega' => 'data_entrega',
+        'preco_unitario' => 'precoU',
+        'precoU' => 'precoU'
     ];
 
     foreach ($data as $k => $v) {
+        // Trata datas como Timestamp
+        if (($k === 'data_entrega' || $k === 'data_ultima_entrega' || $k === 'data') && $v) {
+            $fields[$k] = ['__timestamp' => $v];
+            $mask[] = "updateMask.fieldPaths=" . $k;
+            continue;
+        }
+
         $fields[$k] = $v;
         $mask[] = "updateMask.fieldPaths=" . $k;
-        if (isset($map[$k])) {
+        
+        // Espelha campos se houver mapeamento
+        if (isset($map[$k]) && $map[$k] !== $k) {
             $fields[$map[$k]] = $v;
             $mask[] = "updateMask.fieldPaths=" . $map[$k];
-        }
-        // Se for entrega, adiciona o timestamp
-        if ($k === 'data_ultima_entrega' && $v) {
-            $fields['entrega_timestamp'] = ['__timestamp' => $v];
-            $mask[] = "updateMask.fieldPaths=entrega_timestamp";
         }
     }
 
@@ -406,11 +416,16 @@ function firestore_delete_document(string $col, string $docId): void
 
 function firestore_update_remessa_entrega(string $docId, int $qtd, ?string $data, string $col, float $valRec): void
 {
-    firestore_update_remessa($docId, [
+    $updateData = [
+        'entregue' => $qtd,
         'qtd_entregue' => $qtd,
-        'data_ultima_entrega' => $data,
         'valor_recebido' => $valRec
-    ], $col);
+    ];
+    if ($data) {
+        $updateData['data_entrega'] = $data;
+        $updateData['data_ultima_entrega'] = $data;
+    }
+    firestore_update_remessa($docId, $updateData, $col);
 }
 
 function firestore_upsert_user(array $userData): bool { return true; }
