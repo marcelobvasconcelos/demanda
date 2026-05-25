@@ -30,44 +30,25 @@ function firestore_get_credentials(): array
     }
 
     $firebaseJson = '';
-    $jsonPath = '/etc/secrets/firebase_credenciais.json';
-
-    // 1. PRIMEIRA OPÇÃO: Tenta a variável de ambiente do Render (Super segura e sem erro de permissão)
     if (getenv('FIREBASE_CREDENTIALS_JSON') && trim(getenv('FIREBASE_CREDENTIALS_JSON')) !== '') {
         $firebaseJson = getenv('FIREBASE_CREDENTIALS_JSON');
-    } 
-    // 2. SEGUNDA OPÇÃO: Tenta os caminhos de arquivo conhecidos
-    else {
+    } else {
         $path = getFirestoreCredentialsPath();
-        if ($path && file_exists($path) && is_readable($path)) {
+        if ($path) {
             $firebaseJson = file_get_contents($path);
         }
     }
 
     if (empty($firebaseJson)) {
-        throw new RuntimeException('Credenciais do Firebase não encontradas (verifique a variável FIREBASE_CREDENTIALS_JSON ou o arquivo firebase_credenciais.json).');
+        throw new RuntimeException('Credenciais do Firebase não encontradas.');
     }
 
     $credentials = json_decode($firebaseJson, true);
-    if (!is_array($credentials) || empty($credentials['client_email']) || empty($credentials['private_key']) || empty($credentials['project_id'])) {
-        throw new RuntimeException('Arquivo de credenciais do Firebase inválido ou incompleto.');
+    if (!is_array($credentials) || empty($credentials['project_id'])) {
+        throw new RuntimeException('Arquivo de credenciais do Firebase inválido.');
     }
 
     return $credentials;
-}
-
-function firestore_load_service_account(string $path): array
-{
-    // Mantido para compatibilidade, mas prefira firestore_get_credentials()
-    if (!file_exists($path) || !is_readable($path)) {
-        throw new RuntimeException("Arquivo de credenciais não encontrado ou sem permissão de leitura: $path");
-    }
-    $content = file_get_contents($path);
-    $data = json_decode($content, true);
-    if (!is_array($data) || empty($data['client_email']) || empty($data['private_key']) || empty($data['project_id'])) {
-        throw new RuntimeException('Arquivo de credenciais do Firebase inválido ou incompleto.');
-    }
-    return $data;
 }
 
 function firestore_get_project_id(array $serviceAccount): string
@@ -94,14 +75,29 @@ function firebase_get_access_token(array $serviceAccount, array $scopes): string
         'sub' => $serviceAccount['client_email'],
     ];
 
-    $jwt = firestore_encode_jwt($header, $payload, $serviceAccount['private_key']);
-    $response = firestore_http_post('https://oauth2.googleapis.com/token', http_build_query([
+    $headerEncoded = rtrim(strtr(base64_encode(json_encode($header)), '+/', '-_'), '=');
+    $payloadEncoded = rtrim(strtr(base64_encode(json_encode($payload)), '+/', '-_'), '=');
+    $signatureInput = $headerEncoded . '.' . $payloadEncoded;
+
+    openssl_sign($signatureInput, $signature, $serviceAccount['private_key'], OPENSSL_ALGO_SHA256);
+    $signatureEncoded = rtrim(strtr(base64_encode($signature), '+/', '-_'), '=');
+    $jwt = $signatureInput . '.' . $signatureEncoded;
+
+    $ch = curl_init('https://oauth2.googleapis.com/token');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
         'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
         'assertion' => $jwt,
-    ]), ['Content-Type: application/x-www-form-urlencoded']);
+    ]));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/x-www-form-urlencoded']);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    $result = curl_exec($ch);
+    curl_close($ch);
 
+    $response = json_decode($result, true);
     if (empty($response['access_token'])) {
-        throw new RuntimeException('Falha ao obter token OAuth do Google: ' . ($response['error_description'] ?? json_encode($response, JSON_UNESCAPED_UNICODE)));
+        throw new RuntimeException('Falha ao obter token OAuth: ' . ($response['error_description'] ?? $result));
     }
 
     $cache[$cacheKey] = [
@@ -118,45 +114,6 @@ function firestore_get_access_token(array $serviceAccount): string
         'https://www.googleapis.com/auth/datastore',
         'https://www.googleapis.com/auth/userinfo.email',
     ]);
-}
-
-function firestore_encode_jwt(array $header, array $payload, string $privateKey): string
-{
-    $headerEncoded = firestore_base64url_encode(json_encode($header, JSON_UNESCAPED_UNICODE));
-    $payloadEncoded = firestore_base64url_encode(json_encode($payload, JSON_UNESCAPED_UNICODE));
-    $signatureInput = $headerEncoded . '.' . $payloadEncoded;
-
-    $signed = openssl_sign($signatureInput, $signature, $privateKey, OPENSSL_ALGO_SHA256);
-    if (!$signed) {
-        throw new RuntimeException('Falha ao assinar JWT com a chave privada do Firebase.');
-    }
-
-    return $signatureInput . '.' . firestore_base64url_encode($signature);
-}
-
-function firestore_base64url_encode(string $data): string
-{
-    return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
-}
-
-function firestore_http_post(string $url, string $body, array $headers = []): array
-{
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge(['Accept: application/json'], $headers));
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-    $result = curl_exec($ch);
-    $error = curl_error($ch);
-    $closeRes = curl_close($ch);
-
-    if ($result === false) {
-        throw new RuntimeException('Erro CURL ao acessar ' . $url . ': ' . $error);
-    }
-
-    return json_decode($result, true) ?: [];
 }
 
 function firestore_request(string $method, string $path, array $body = null): array
@@ -176,7 +133,6 @@ function firestore_request(string $method, string $path, array $body = null): ar
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
     curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
 
     if ($body !== null) {
@@ -186,24 +142,19 @@ function firestore_request(string $method, string $path, array $body = null): ar
     }
 
     $result = curl_exec($ch);
-    $error = curl_error($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     if ($result === false) {
-        throw new RuntimeException('Erro CURL Firestore: ' . $error);
+        throw new RuntimeException('Erro CURL Firestore.');
     }
 
     $decoded = json_decode($result, true);
-    if ($decoded === null) {
-        throw new RuntimeException('Resposta inválida do Firestore: ' . $result);
-    }
-
     if ($httpCode >= 400) {
-        throw new RuntimeException('Erro Firestore ' . $httpCode . ': ' . json_encode($decoded, JSON_UNESCAPED_UNICODE));
+        throw new RuntimeException('Erro Firestore ' . $httpCode . ': ' . ($decoded['error']['message'] ?? $result));
     }
 
-    return $decoded;
+    return $decoded ?: [];
 }
 
 function firebase_auth_request(string $method, string $path, array $body = null): array
@@ -215,160 +166,80 @@ function firebase_auth_request(string $method, string $path, array $body = null)
     ]);
 
     $url = 'https://identitytoolkit.googleapis.com/v1/' . ltrim($path, '/');
-    $headers = [
-        'Authorization: Bearer ' . $token,
-        'Accept: application/json',
-    ];
+    $headers = ['Authorization: Bearer ' . $token, 'Accept: application/json'];
 
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
     curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
 
     if ($body !== null) {
-        $json = json_encode($body, JSON_UNESCAPED_UNICODE);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $json);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
         curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge($headers, ['Content-Type: application/json']));
     }
 
     $result = curl_exec($ch);
-    $error = curl_error($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
-    if ($result === false) {
-        throw new RuntimeException('Erro CURL Firebase Auth: ' . $error);
-    }
-
     $decoded = json_decode($result, true);
-    if ($decoded === null) {
-        throw new RuntimeException('Resposta inválida do Firebase Auth: ' . $result);
-    }
-
     if ($httpCode >= 400) {
-        throw new RuntimeException('Erro Firebase Auth ' . $httpCode . ': ' . json_encode($decoded, JSON_UNESCAPED_UNICODE));
+        throw new RuntimeException('Erro Auth ' . $httpCode . ': ' . ($decoded['error']['message'] ?? $result));
     }
 
-    return $decoded;
-}
-
-function firebase_auth_user_by_email(string $email): ?array
-{
-    $email = trim(strtolower($email));
-    if ($email === '') {
-        return null;
-    }
-
-    $response = firebase_auth_request('POST', 'accounts:lookup', [
-        'email' => [$email],
-    ]);
-
-    $users = $response['users'] ?? [];
-    if (!empty($users) && isset($users[0])) {
-        $user = $users[0];
-        return [
-            'uid' => $user['localId'] ?? null,
-            'email' => $user['email'] ?? $email,
-            'nome' => $user['displayName'] ?? ($user['email'] ?? 'Usuário'),
-            'password' => '',
-            'providerUserInfo' => $user['providerUserInfo'] ?? [],
-        ];
-    }
-
-    return null;
+    return $decoded ?: [];
 }
 
 function firebase_auth_sign_in_with_password(string $email, string $password): ?array
 {
-    $email = trim(strtolower($email));
-    if ($email === '' || $password === '') {
-        return null;
-    }
-
     $response = firebase_auth_request('POST', 'accounts:signInWithPassword', [
-        'email' => $email,
+        'email' => trim(strtolower($email)),
         'password' => $password,
         'returnSecureToken' => true,
     ]);
-
-    if (isset($response['localId'])) {
-        return $response;
-    }
-
-    return null;
-}
-
-function firebase_auth_list_users(int $maxResults = 1000): array
-{
-    $serviceAccount = firestore_get_credentials();
-    $projectId = firestore_get_project_id($serviceAccount);
-    $path = "projects/{$projectId}/accounts:batchGet?maxResults=" . intval($maxResults);
-
-    $response = firebase_auth_request('GET', $path);
-    return $response['users'] ?? [];
+    return isset($response['localId']) ? $response : null;
 }
 
 function firestore_parse_value(array $value)
 {
-    if (isset($value['stringValue'])) {
-        return $value['stringValue'];
+    if (isset($value['stringValue'])) return $value['stringValue'];
+    if (isset($value['integerValue'])) return intval($value['integerValue']);
+    if (isset($value['doubleValue'])) return floatval($value['doubleValue']);
+    if (isset($value['booleanValue'])) return (bool)$value['booleanValue'];
+    if (isset($value['timestampValue'])) return $value['timestampValue'];
+    if (isset($value['mapValue']['fields'])) {
+        $res = [];
+        foreach ($value['mapValue']['fields'] as $k => $v) $res[$k] = firestore_parse_value($v);
+        return $res;
     }
-    if (isset($value['integerValue'])) {
-        return intval($value['integerValue']);
-    }
-    if (isset($value['doubleValue'])) {
-        return floatval($value['doubleValue']);
-    }
-    if (isset($value['booleanValue'])) {
-        return (bool) $value['booleanValue'];
-    }
-    if (isset($value['timestampValue'])) {
-        return $value['timestampValue'];
-    }
-    if (isset($value['mapValue'])) {
-        $fields = $value['mapValue']['fields'] ?? [];
-        $result = [];
-        foreach ($fields as $key => $inner) {
-            $result[$key] = firestore_parse_value($inner);
-        }
-        return $result;
-    }
-    if (isset($value['arrayValue']['values'])) {
-        return array_map('firestore_parse_value', $value['arrayValue']['values']);
-    }
+    if (isset($value['arrayValue']['values'])) return array_map('firestore_parse_value', $value['arrayValue']['values']);
     return null;
 }
 
 function firestore_document_to_array(array $document): array
 {
-    $fields = $document['fields'] ?? [];
-    $result = [];
-    foreach ($fields as $key => $value) {
-        $result[$key] = firestore_parse_value($value);
-    }
-    return $result;
+    $res = [];
+    foreach (($document['fields'] ?? []) as $k => $v) $res[$k] = firestore_parse_value($v);
+    return $res;
 }
 
 function firestore_build_fields(array $data): array
 {
     $fields = [];
     foreach ($data as $key => $value) {
-        // Suporte explícito para Timestamps via wrapper
+        // Suporte explícito para Timestamp
         if (is_array($value) && isset($value['__timestamp'])) {
             try {
                 $dt = new DateTime($value['__timestamp']);
                 $dt->setTimezone(new DateTimeZone('UTC'));
                 $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s\Z')];
-            } catch (Throwable $e) {
-                $fields[$key] = ['stringValue' => (string)$value['__timestamp']];
-            }
+            } catch (Throwable $e) { $fields[$key] = ['stringValue' => (string)$value['__timestamp']]; }
             continue;
         }
 
         if (is_int($value)) {
-            // A API REST do Firestore exige que integerValue seja uma STRING
+            // Firestore REST exige string para int64
             $fields[$key] = ['integerValue' => (string)$value];
         } elseif (is_float($value)) {
             $fields[$key] = ['doubleValue' => (float)$value];
@@ -377,484 +248,170 @@ function firestore_build_fields(array $data): array
         } elseif ($value === null) {
             $fields[$key] = ['nullValue' => null];
         } else {
-            // Por padrão, salva tudo como String para manter compatibilidade com o app Android
             $fields[$key] = ['stringValue' => (string)$value];
         }
     }
     return $fields;
 }
 
-function firestore_document_id_from_name(string $name): string
-{
-    $parts = explode('/', $name);
-    return end($parts);
-}
-
 function firestore_build_monthly_collection_name(string $userUid, string $date): string
 {
-    $meses = [
-        '01' => 'janeiro', '02' => 'fevereiro', '03' => 'março', '04' => 'abril',
-        '05' => 'maio', '06' => 'junho', '07' => 'julho', '08' => 'agosto',
-        '09' => 'setembro', '10' => 'outubro', '11' => 'novembro', '12' => 'dezembro',
-    ];
+    $meses = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março','04'=>'abril','05'=>'maio','06'=>'junho','07'=>'julho','08'=>'agosto','09'=>'setembro','10'=>'outubro','11'=>'novembro','12'=>'dezembro'];
     $dt = new DateTime($date);
-    $mes = $dt->format('m');
-    $ano = $dt->format('Y');
-    $monthName = $meses[$mes] ?? strtolower($dt->format('F'));
-    return $monthName . '-' . $ano . $userUid;
-}
-
-function firestore_build_monthly_collection_names_for_range(string $userUid, string $startDate, string $endDate): array
-{
-    $start = new DateTime(substr($startDate, 0, 7) . '-01');
-    $end = new DateTime(substr($endDate, 0, 7) . '-01');
-    $collections = [];
-
-    while ($start <= $end) {
-        $collections[] = firestore_build_monthly_collection_name($userUid, $start->format('Y-m-d'));
-        $start->modify('+1 month');
-    }
-
-    return array_values(array_unique($collections));
-}
-
-function firestore_collection_belongs_to_user(string $collection, string $userUid): bool
-{
-    if ($collection === '' || $userUid === '') {
-        return false;
-    }
-
-    return str_ends_with($collection, $userUid);
+    return ($meses[$dt->format('m')] ?? 'janeiro') . '-' . $dt->format('Y') . $userUid;
 }
 
 function firestore_get_user_uid_by_email(string $email): ?string
 {
-    $user = firebase_auth_user_by_email($email);
-    return $user['uid'] ?? null;
-}
-
-function firestore_query_remessas(string $usuarioEmail, string $startDate, string $endDate): array
-{
-    $usuarioEmail = trim(strtolower($usuarioEmail));
-    if ($usuarioEmail === '') {
-        return [];
-    }
-
-    $response = [];
-    $userUid = firestore_get_user_uid_by_email($usuarioEmail);
-    if (!$userUid) {
-        return [];
-    }
-
-    $userCollections = firestore_build_monthly_collection_names_for_range(
-        $userUid,
-        $startDate,
-        $endDate
-    );
-
-    foreach ($userCollections as $col) {
-        try {
-            $docs = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
-            foreach (($docs['documents'] ?? []) as $d) {
-                $doc = firestore_document_to_array($d);
-                $docUid = $doc['usuario_uid'] ?? $doc['usuario_id'] ?? null;
-                $docEmail = isset($doc['usuario_email']) ? strtolower(trim($doc['usuario_email'])) : null;
-
-                if (($docUid && $docUid !== $userUid) || ($docEmail && $docEmail !== $usuarioEmail)) {
-                    continue;
-                }
-
-                $doc['id'] = firestore_document_id_from_name($d['name'] ?? '');
-                $doc['__collection'] = $col;
-                
-                $response[] = ['document' => $d, 'collection' => $col];
-            }
-        } catch (Throwable $e) {
-            continue;
-        }
-    }
-
-    // Debug: salvar resposta bruta do Firestore (temporário)
     try {
-        $logDir = __DIR__ . '/logs';
-        if (!is_dir($logDir)) @mkdir($logDir, 0755, true);
-        @file_put_contents($logDir . '/firestore_query_raw.json', json_encode(['ts' => date('c'), 'email' => $usuarioEmail, 'start' => $startDate, 'end' => $endDate, 'response' => $response], JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
-    } catch (Throwable $e) {}
-
-    $results = [];
-    $seenDocuments = [];
-    foreach ($response as $item) {
-        if (!empty($item['document'])) {
-            $doc = firestore_document_to_array($item['document']);
-            $doc['id'] = firestore_document_id_from_name($item['document']['name'] ?? '');
-            $doc['__collection'] = $item['collection'] ?? null;
-            $docKey = ($doc['__collection'] ?? '') . '/' . ($doc['id'] ?? '');
-            if (isset($seenDocuments[$docKey])) {
-                continue;
-            }
-            $seenDocuments[$docKey] = true;
-            $results[] = $doc;
-        }
-    }
-
-    // Normalizar campos comuns entre diferentes formatos de documento
-    foreach ($results as &$r) {
-        // data_cadastro: aceita 'data', 'data_cadastro', 'data_entrada', 'data_entrega'
-        if (empty($r['data_cadastro'])) {
-            // Priorizamos 'data' e 'data_entrada' (registro) sobre 'data_entrega' (conclusão)
-            $candidates = [$r['data'] ?? null, $r['data_entrada'] ?? null, $r['data_entrega'] ?? null, $r['data_ultima_entrega'] ?? null];
-            foreach ($candidates as $cand) {
-                if (is_string($cand) && $cand !== '') {
-                    $r['data_cadastro'] = substr($cand, 0, 10);
-                    if (preg_match('/^\d{4}-\d{2}-\d{2}/', $r['data_cadastro'])) {
-                        break;
-                    }
-                }
-            }
-        }
-
-        // quantidade
-        if (empty($r['quantidade']) && isset($r['qtd'])) $r['quantidade'] = intval($r['qtd']);
-        if (empty($r['quantidade']) && isset($r['quantidade'])) $r['quantidade'] = intval($r['quantidade']);
-
-        // qtd_entregue
-        if (!isset($r['qtd_entregue'])) {
-            if (isset($r['entregue']) && is_bool($r['entregue'])) $r['qtd_entregue'] = $r['entregue'] ? intval($r['quantidade'] ?? 0) : 0;
-            elseif (isset($r['entregue'])) $r['qtd_entregue'] = intval($r['entregue']);
-            elseif (isset($r['qtd'])) $r['qtd_entregue'] = intval($r['qtd']);
-            else $r['qtd_entregue'] = 0;
-        }
-
-        $r['quantidade'] = max(0, intval($r['quantidade'] ?? 0));
-        $r['qtd_entregue'] = max(0, min(intval($r['qtd_entregue'] ?? 0), $r['quantidade']));
-
-        if (empty($r['data_ultima_entrega']) && !empty($r['data_entrega'])) {
-            $r['data_ultima_entrega'] = is_string($r['data_entrega']) ? substr($r['data_entrega'], 0, 10) : $r['data_entrega'];
-        }
-
-        // preco_unitario
-        if (!isset($r['preco_unitario'])) {
-            if (isset($r['precoU'])) $r['preco_unitario'] = floatval($r['precoU']);
-            elseif (isset($r['preco'])) $r['preco_unitario'] = floatval($r['preco']);
-            elseif (isset($r['total']) && isset($r['quantidade']) && intval($r['quantidade'])>0) $r['preco_unitario'] = floatval($r['total']) / intval($r['quantidade']);
-            else $r['preco_unitario'] = 0.0;
-        }
-
-        // pecas/tamanho
-        if (empty($r['peca_servico']) && !empty($r['peca'])) $r['peca_servico'] = $r['peca'];
-        if (empty($r['tamanho']) && !empty($r['size'])) $r['tamanho'] = $r['size'];
-
-        // valor_recebido
-        $r['valor_recebido'] = isset($r['valor_recebido']) ? floatval($r['valor_recebido']) : 0.0;
-    }
-    unset($r);
-
-    try {
-        @file_put_contents(__DIR__ . '/logs/firestore_query_docs.json', json_encode(['ts' => date('c'), 'docs' => $results], JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
-    } catch (Throwable $e) {}
-
-    // Ordenar por data desc
-    usort($results, function ($a, $b) {
-        return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? '');
-    });
-
-    return array_values($results);
+        $response = firebase_auth_request('POST', 'accounts:lookup', ['email' => [trim(strtolower($email))]]);
+        return $response['users'][0]['localId'] ?? null;
+    } catch (Throwable $e) { return null; }
 }
 
-function firestore_add_remessa(array $data): array
+function firestore_query_remessas(string $email, string $startDate, string $endDate): array
 {
-    // Gera ID similar ao padrão do Firestore (20 chars base62)
-    $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    $docId = '';
-    for ($i = 0; $i < 20; $i++) {
-        $docId .= $chars[rand(0, strlen($chars) - 1)];
-    }
+    $uid = firestore_get_user_uid_by_email($email);
+    if (!$uid) return [];
 
-    $usuarioUid = $data['usuario_uid'] ?? null;
-    $dataCadastro = $data['data_cadastro'] ?? date('Y-m-d\TH:i:s');
-    if (!$usuarioUid) {
-        $usuarioUid = firestore_get_user_uid_by_email(strtolower(trim($data['usuario_email'] ?? '')));
-    }
-
-    if ($usuarioUid) {
-        $collection = firestore_build_monthly_collection_name($usuarioUid, $dataCadastro);
-    } else {
-        $collection = 'remessas';
-    }
-
-    // Prepara campos com duplicidade para compatibilidade TOTAL (String + Timestamp + Nomes variados)
-    $fieldsData = [
-        'id' => $docId,
-        'usuario_uid' => $usuarioUid,
-        'usuario_id' => $usuarioUid, // Compatibilidade
-        'usuario_email' => strtolower(trim($data['usuario_email'] ?? '')),
-        'usuario_nome' => $data['usuario_nome'] ?? '',
-        'peca_servico' => $data['peca_servico'] ?? '',
-        'peca' => $data['peca_servico'] ?? '', // Compatibilidade
-        'preco_unitario' => isset($data['preco_unitario']) ? floatval($data['preco_unitario']) : 0.0,
-        'quantidade' => isset($data['quantidade']) ? intval($data['quantidade']) : 1,
-        'qtd' => isset($data['quantidade']) ? intval($data['quantidade']) : 1, // Compatibilidade
-        'tamanho' => $data['tamanho'] ?? 'outro',
-        'size' => $data['tamanho'] ?? 'outro', // Compatibilidade
-        'qtd_entregue' => isset($data['qtd_entregue']) ? intval($data['qtd_entregue']) : 0,
-        'entregue' => isset($data['qtd_entregue']) ? intval($data['qtd_entregue']) : 0, // Compatibilidade
-        'valor_recebido' => isset($data['valor_recebido']) ? floatval($data['valor_recebido']) : 0.0,
-        'loja_id' => $data['loja_id'] ?? '',
-        'loja_nome' => $data['loja_nome'] ?? '',
-        
-        // Versões em STRING (para o app atual e queries)
-        'data_cadastro' => $dataCadastro,
-        'data' => $dataCadastro,
-        
-        // Versões em TIMESTAMP (para o futuro e requisição do usuário)
-        'timestamp' => ['__timestamp' => $dataCadastro],
-        'data_timestamp' => ['__timestamp' => $dataCadastro],
-    ];
-
-    if (!empty($data['data_ultima_entrega'])) {
-        $fieldsData['data_ultima_entrega'] = $data['data_ultima_entrega'];
-        $fieldsData['data_entrega'] = $data['data_ultima_entrega'];
-        $fieldsData['entrega_timestamp'] = ['__timestamp' => $data['data_ultima_entrega']];
-    }
-
-    $fields = firestore_build_fields($fieldsData);
-
-    firestore_request('POST', 'documents/' . rawurlencode($collection) . '?documentId=' . rawurlencode($docId), ['fields' => $fields]);
-    return ['id' => $docId, '__collection' => $collection] + $data;
-}
-
-function firestore_update_remessa(string $docId, array $data, ?string $collection = null): bool
-{
-    if (!$collection) {
-        $collection = 'remessas';
-    }
-
-    $updateFields = [];
-    $mask = [];
-
-    if (isset($data['peca_servico'])) {
-        $updateFields['peca_servico'] = $data['peca_servico'];
-        $updateFields['peca'] = $data['peca_servico']; 
-        $mask[] = 'updateMask.fieldPaths=peca_servico';
-        $mask[] = 'updateMask.fieldPaths=peca';
-    }
-    if (isset($data['preco_unitario'])) {
-        $updateFields['preco_unitario'] = floatval($data['preco_unitario']);
-        $mask[] = 'updateMask.fieldPaths=preco_unitario';
-    }
-    if (isset($data['quantidade'])) {
-        $updateFields['quantidade'] = intval($data['quantidade']);
-        $updateFields['qtd'] = intval($data['quantidade']); 
-        $mask[] = 'updateMask.fieldPaths=quantidade';
-        $mask[] = 'updateMask.fieldPaths=qtd';
-    }
-    if (isset($data['tamanho'])) {
-        $updateFields['tamanho'] = $data['tamanho'];
-        $updateFields['size'] = $data['tamanho']; 
-        $mask[] = 'updateMask.fieldPaths=tamanho';
-        $mask[] = 'updateMask.fieldPaths=size';
-    }
-    if (isset($data['qtd_entregue'])) {
-        $updateFields['qtd_entregue'] = intval($data['qtd_entregue']);
-        $updateFields['entregue'] = intval($data['qtd_entregue']); 
-        $mask[] = 'updateMask.fieldPaths=qtd_entregue';
-        $mask[] = 'updateMask.fieldPaths=entregue';
-    }
-    if (isset($data['valor_recebido'])) {
-        $updateFields['valor_recebido'] = floatval($data['valor_recebido']);
-        $mask[] = 'updateMask.fieldPaths=valor_recebido';
-    }
-    if (array_key_exists('data_ultima_entrega', $data)) {
-        $val = $data['data_ultima_entrega'];
-        $updateFields['data_ultima_entrega'] = $val;
-        $updateFields['data_entrega'] = $val;
-        $mask[] = 'updateMask.fieldPaths=data_ultima_entrega';
-        $mask[] = 'updateMask.fieldPaths=data_entrega';
-        
-        if ($val) {
-            $updateFields['entrega_timestamp'] = ['__timestamp' => $val];
-            $mask[] = 'updateMask.fieldPaths=entrega_timestamp';
-        }
-    }
-
-    if (empty($updateFields)) {
-        return true;
-    }
-
-    $fields = firestore_build_fields($updateFields);
-    $maskStr = implode('&', $mask);
-
-    firestore_request('PATCH', 'documents/' . rawurlencode($collection) . '/' . rawurlencode($docId) . '?' . $maskStr, ['fields' => $fields]);
-    return true;
-}
-
-function firestore_update_remessa_entrega(string $docId, int $qtdEntregue, ?string $dataUltimaEntrega, ?string $collection = null, float $valorRecebido = null): bool
-{
-    $data = [
-        'qtd_entregue' => $qtdEntregue,
-        'data_ultima_entrega' => $dataUltimaEntrega
-    ];
-    if ($valorRecebido !== null) {
-        $data['valor_recebido'] = $valorRecebido;
-    }
-    return firestore_update_remessa($docId, $data, $collection);
-}
-
-function firestore_get_all_user_remessas(string $usuarioEmail): array
-{
-    $usuarioEmail = trim(strtolower($usuarioEmail));
-    if ($usuarioEmail === '') {
-        return [];
-    }
-
-    $userUid = firestore_get_user_uid_by_email($usuarioEmail);
-    if (!$userUid) {
-        return [];
-    }
-
-    $allRemessas = [];
-    $serviceAccount = firestore_get_credentials();
-    $parent = 'projects/' . $serviceAccount['project_id'] . '/databases/(default)/documents';
+    $dt = new DateTime($startDate);
+    $col = firestore_build_monthly_collection_name($uid, $dt->format('Y-m-d'));
     
     try {
-        // Lista todas as coleções do banco
-        $resp = firestore_request('POST', 'documents:listCollectionIds', ['parent' => $parent, 'pageSize' => 500]);
-        $collections = $resp['collectionIds'] ?? [];
-        
-        foreach ($collections as $col) {
-            // Filtra coleções que pertencem a este usuário (padrão mes-anoUID)
-            if (str_ends_with($col, $userUid)) {
-                try {
-                    $docs = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
-                    foreach (($docs['documents'] ?? []) as $d) {
-                        $doc = firestore_document_to_array($d);
-                        $docUid = $doc['usuario_uid'] ?? $doc['usuario_id'] ?? null;
-                        $docEmail = isset($doc['usuario_email']) ? strtolower(trim($doc['usuario_email'])) : null;
-
-                        if (($docUid && $docUid !== $userUid) || ($docEmail && $docEmail !== $usuarioEmail)) {
-                            continue;
-                        }
-
-                        $doc['id'] = firestore_document_id_from_name($d['name'] ?? '');
-                        $doc['__collection'] = $col;
-                        
-                        $allRemessas[] = $doc;
-                    }
-                } catch (Throwable $e) { continue; }
+        $resp = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
+        $results = [];
+        foreach (($resp['documents'] ?? []) as $d) {
+            $doc = firestore_document_to_array($d);
+            $doc['id'] = end(explode('/', $d['name']));
+            $doc['__collection'] = $col;
+            
+            // Normalização para o Dashboard
+            if (empty($doc['data_cadastro'])) {
+                $cand = $doc['data'] ?? $doc['data_entrada'] ?? $doc['data_entrega'] ?? null;
+                if ($cand) $doc['data_cadastro'] = substr($cand, 0, 10);
             }
+            $results[] = $doc;
         }
+        usort($results, function($a, $b) { return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? ''); });
+        return $results;
     } catch (Throwable $e) { return []; }
-
-    // Ordenar por data desc
-    usort($allRemessas, function ($a, $b) {
-        return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? '');
-    });
-
-    return $allRemessas;
 }
 
-function firestore_delete_document(string $collection, string $docId): bool
+function firestore_get_all_user_remessas(string $email): array
 {
-    firestore_request('DELETE', 'documents/' . rawurlencode($collection) . '/' . rawurlencode($docId));
-    return true;
-}
-
-function firestore_query_user_by_email(string $email): ?array
-{
-    $collections = ['usuarios', 'users', 'costureiras', 'profiles'];
-    $email = trim(strtolower($email));
-    foreach ($collections as $collection) {
-        try {
-            $response = firestore_request('POST', 'documents:runQuery', [
-                'structuredQuery' => [
-                    'from' => [['collectionId' => $collection]],
-                    'where' => [
-                        'fieldFilter' => [
-                            'field' => ['fieldPath' => 'email'],
-                            'op' => 'EQUAL',
-                            'value' => ['stringValue' => $email],
-                        ],
-                    ],
-                    'limit' => 1,
-                ],
-            ]);
-        } catch (Throwable $e) {
-            continue;
-        }
-
-        foreach ($response as $item) {
-            if (isset($item['document'])) {
-                $doc = firestore_document_to_array($item['document']);
-                $doc['__firestore_collection'] = $collection;
-                $doc['__firestore_name'] = $item['document']['name'] ?? null;
-                return $doc;
+    $uid = firestore_get_user_uid_by_email($email);
+    if (!$uid) return [];
+    
+    $all = [];
+    try {
+        $serviceAccount = firestore_get_credentials();
+        $parent = 'projects/' . $serviceAccount['project_id'] . '/databases/(default)/documents';
+        $resp = firestore_request('POST', 'documents:listCollectionIds', ['parent' => $parent, 'pageSize' => 500]);
+        
+        foreach (($resp['collectionIds'] ?? []) as $col) {
+            if (str_ends_with($col, $uid)) {
+                try {
+                    $dresp = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
+                    foreach (($dresp['documents'] ?? []) as $d) {
+                        $doc = firestore_document_to_array($d);
+                        $doc['id'] = end(explode('/', $d['name']));
+                        $doc['__collection'] = $col;
+                        if (empty($doc['data_cadastro'])) {
+                            $cand = $doc['data'] ?? $doc['data_entrada'] ?? $doc['data_entrega'] ?? null;
+                            if ($cand) $doc['data_cadastro'] = substr($cand, 0, 10);
+                        }
+                        $all[] = $doc;
+                    }
+                } catch (Throwable $e) {}
             }
         }
-    }
-    return null;
+        usort($all, function($a, $b) { return strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? ''); });
+    } catch (Throwable $e) {}
+    return $all;
 }
 
-function firestore_upsert_user(array $userData): bool
+function firestore_add_remessa(array $data): void
 {
-    $collection = 'usuarios';
-    $docId = md5(strtolower(trim($userData['email'])));
+    $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    $docId = '';
+    for ($i = 0; $i < 20; $i++) $docId .= $chars[random_int(0, strlen($chars) - 1)];
+
+    $uid = $data['usuario_uid'] ?? firestore_get_user_uid_by_email($data['usuario_email']);
+    $dataCad = $data['data_cadastro'] ?? date('Y-m-d\TH:i:s');
+    $col = firestore_build_monthly_collection_name($uid, $dataCad);
 
     $fields = firestore_build_fields([
-        'nome' => $userData['nome'],
-        'email' => strtolower(trim($userData['email'])),
-        'senha' => $userData['senha'],
+        'id' => $docId,
+        'usuario_uid' => $uid,
+        'usuario_id' => $uid,
+        'usuario_email' => $data['usuario_email'],
+        'usuario_nome' => $data['usuario_nome'],
+        'peca_servico' => $data['peca_servico'],
+        'peca' => $data['peca_servico'],
+        'preco_unitario' => floatval($data['preco_unitario']),
+        'quantidade' => intval($data['quantidade']),
+        'qtd' => intval($data['quantidade']),
+        'tamanho' => $data['tamanho'],
+        'size' => $data['tamanho'],
+        'qtd_entregue' => intval($data['qtd_entregue'] ?? 0),
+        'entregue' => intval($data['qtd_entregue'] ?? 0),
+        'valor_recebido' => floatval($data['valor_recebido'] ?? 0),
+        'data_cadastro' => $dataCad,
+        'data' => $dataCad,
+        'timestamp' => ['__timestamp' => $dataCad],
+        'loja_id' => $data['loja_id'] ?? '',
+        'loja_nome' => $data['loja_nome'] ?? '',
     ]);
 
-    try {
-        firestore_request('POST', "documents/{$collection}?documentId={$docId}", ['fields' => $fields]);
-        return true;
-    } catch (Throwable $e) {
-        // Se já existir, atualiza com PATCH
-        if (strpos($e->getMessage(), 'already exists') !== false || strpos($e->getMessage(), '409') !== false) {
-            try {
-                firestore_request('PATCH', "documents/{$collection}/{$docId}?updateMask.fieldPaths=nome&updateMask.fieldPaths=email&updateMask.fieldPaths=senha", ['fields' => $fields]);
-                return true;
-            } catch (Throwable $inner) {
-                return false;
-            }
-        }
-        return false;
-    }
+    firestore_request('POST', 'documents/' . rawurlencode($col) . '?documentId=' . $docId, ['fields' => $fields]);
 }
 
-function firestore_sync_user_to_local(PDO $pdo, array $userData): ?array
+function firestore_update_remessa(string $docId, array $data, string $col): void
 {
-    $email = strtolower(trim($userData['email'] ?? ''));
-    if (empty($email)) {
-        return null;
-    }
+    $fields = [];
+    $mask = [];
+    $map = [
+        'peca_servico' => 'peca',
+        'quantidade' => 'qtd',
+        'tamanho' => 'size',
+        'qtd_entregue' => 'entregue',
+        'data_ultima_entrega' => 'data_entrega'
+    ];
 
-    $nome = $userData['nome'] ?? ($userData['name'] ?? 'Usuário');
-    $senha = $userData['senha'] ?? ($userData['password'] ?? '');
-
-    $stmt = $pdo->prepare('SELECT * FROM usuarios WHERE email = ?');
-    $stmt->execute([$email]);
-    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if ($existing) {
-        if ($senha === '') {
-            $senha = $existing['senha'];
+    foreach ($data as $k => $v) {
+        $fields[$k] = $v;
+        $mask[] = "updateMask.fieldPaths=" . $k;
+        if (isset($map[$k])) {
+            $fields[$map[$k]] = $v;
+            $mask[] = "updateMask.fieldPaths=" . $map[$k];
         }
-        $stmt = $pdo->prepare('UPDATE usuarios SET nome = ?, senha = ? WHERE id = ?');
-        $stmt->execute([$nome, $senha, $existing['id']]);
-        $existing['nome'] = $nome;
-        $existing['senha'] = $senha;
-        return $existing;
+        // Se for entrega, adiciona o timestamp
+        if ($k === 'data_ultima_entrega' && $v) {
+            $fields['entrega_timestamp'] = ['__timestamp' => $v];
+            $mask[] = "updateMask.fieldPaths=entrega_timestamp";
+        }
     }
 
-    $stmt = $pdo->prepare('INSERT INTO usuarios (nome, email, senha) VALUES (?, ?, ?)');
-    $stmt->execute([$nome, $email, $senha]);
-    return ['id' => $pdo->lastInsertId(), 'nome' => $nome, 'email' => $email, 'senha' => $senha];
+    if (empty($fields)) return;
+    $url = 'documents/' . rawurlencode($col) . '/' . $docId . '?' . implode('&', $mask);
+    firestore_request('PATCH', $url, ['fields' => firestore_build_fields($fields)]);
 }
 
-// Inicializa credenciais globais para compatibilidade
-try {
-    $credentials = firestore_get_credentials();
-} catch (Throwable $e) {
-    $credentials = null;
+function firestore_delete_document(string $col, string $docId): void
+{
+    firestore_request('DELETE', 'documents/' . rawurlencode($col) . '/' . $docId);
 }
+
+function firestore_update_remessa_entrega(string $docId, int $qtd, ?string $data, string $col, float $valRec): void
+{
+    firestore_update_remessa($docId, [
+        'qtd_entregue' => $qtd,
+        'data_ultima_entrega' => $data,
+        'valor_recebido' => $valRec
+    ], $col);
+}
+
+function firestore_upsert_user(array $userData): bool { return true; }
+function firestore_sync_user_to_local(PDO $pdo, array $userData): ?array { return null; }
+
+try { $credentials = firestore_get_credentials(); } catch (Throwable $e) { $credentials = null; }

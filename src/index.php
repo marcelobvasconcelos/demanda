@@ -58,7 +58,7 @@ if ($dbConnected && $pdo) {
     $lojas = $pdo->query("SELECT id, nome FROM lojas ORDER BY nome ASC")->fetchAll();
 }
 
-// Lógica de Abas
+// Lógica de Abas e Filtros (Atualizado com correções de campos)
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'remessas';
 
 // Filtro de Mês/Ano
@@ -254,7 +254,7 @@ function abreviarNome($n) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Demanda - Gestão de Ateliê</title>
+    <title>Demanda - Gestão de Ateliê Profissional</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -308,7 +308,8 @@ function abreviarNome($n) {
                 <?php foreach ($remessas as $r): 
                     $qtd = intval($r['quantidade'] ?? 0); $ent = intval($r['qtd_entregue'] ?? 0);
                     $perc = $qtd > 0 ? round(($ent / $qtd) * 100) : 0;
-                    $total = $qtd * floatval($r['preco_unitario'] ?? 0);
+                    $prUnit = floatval($r['preco_unitario'] ?? 0);
+                    $total = $qtd * $prUnit;
                     $rec = floatval($r['valor_recebido'] ?? 0);
                     $pend = max(0, $total - $rec);
                 ?>
@@ -316,8 +317,8 @@ function abreviarNome($n) {
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-lg font-bold text-stone-900 capitalize"><?php echo $qtd; ?> <?php echo htmlspecialchars($r['peca_servico'] ?? 'Lote'); ?>(s)</span>
                             <div class="flex items-center gap-1.5">
-                                <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qtd; ?>, <?php echo $r['preco_unitario'] ?? 0; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
-                                <button onclick="openUpdateQtd('<?php echo $r['id']; ?>', <?php echo $ent; ?>, <?php echo $qtd; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $rec; ?>, <?php echo $r['preco_unitario'] ?? 0; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 text-stone-600 flex items-center justify-center font-bold text-xs hover:bg-stone-50 cursor-pointer"><?php echo $perc >= 100 ? '<i data-lucide="check" class="w-4 h-4"></i>' : '+'; ?></button>
+                                <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qtd; ?>, <?php echo $prUnit; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
+                                <button onclick="openUpdateQtd('<?php echo $r['id']; ?>', <?php echo $ent; ?>, <?php echo $qtd; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $rec; ?>, <?php echo $prUnit; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 text-stone-600 flex items-center justify-center font-bold text-xs hover:bg-stone-50 cursor-pointer"><?php echo $perc >= 100 ? '<i data-lucide="check" class="w-4 h-4"></i>' : '+'; ?></button>
                                 <button onclick='openEditRemessa(<?php echo json_encode($r); ?>)' class="p-1.5 text-stone-400 hover:text-stone-900"><i data-lucide="pencil" class="w-4 h-4"></i></button>
                             </div>
                         </div>
@@ -368,18 +369,18 @@ function abreviarNome($n) {
                         <thead class="text-[10px] font-bold text-stone-400 uppercase tracking-wider"><tr><th class="py-3 text-left">Peça / Data</th><th class="py-3 text-center">Progresso</th><th class="py-3 text-center">Status</th><th class="py-3 text-right">Valor</th></tr></thead>
                         <tbody class="divide-y divide-stone-100 bg-white">
                         <?php foreach (array_slice($remessas, 0, 10) as $r): 
-                            $qtdTotal = intval($r['quantidade'] ?? 0);
-                            $precoUnit = floatval($r['preco_unitario'] ?? 0);
-                            $valTotal = $qtdTotal * $precoUnit; 
-                            $recTotal = floatval($r['valor_recebido'] ?? 0); 
-                            $pendTotal = max(0, $valTotal - $recTotal); 
-                            $qtdEnt = intval($r['qtd_entregue'] ?? 0);
+                            $qT = intval($r['quantidade'] ?? 0);
+                            $pU = floatval($r['preco_unitario'] ?? 0);
+                            $vT = $qT * $pU; 
+                            $rT = floatval($r['valor_recebido'] ?? 0); 
+                            $pT = max(0, $vT - $rT); 
+                            $qE = intval($r['qtd_entregue'] ?? 0);
                         ?>
                             <tr class="hover:bg-stone-50/50 transition-colors">
                                 <td class="py-4"><div class="font-bold text-stone-900 text-sm capitalize"><?php echo htmlspecialchars($r['peca_servico'] ?? 'Lote'); ?></div><div class="text-stone-400 text-[9px]"><?php echo formatDate($r['data_cadastro'] ?? null); ?></div></td>
-                                <td class="py-4 text-center"><div class="text-[9px] font-bold text-stone-500"><?php echo $qtdEnt; ?>/<?php echo $qtdTotal; ?></div><div class="w-20 bg-stone-100 h-1.5 rounded-full mx-auto"><div class="h-full bg-stone-900 rounded-full" style="width:<?php echo $qtdTotal > 0 ? ($qtdEnt / $qtdTotal * 100) : 0; ?>%"></div></div></td>
-                                <td class="py-4 text-center"><span class="px-2 py-0.5 rounded-full font-bold text-[9px] uppercase border <?php echo $pendTotal <= 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : ($recTotal > 0 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-rose-50 text-rose-700 border-rose-200'); ?>"><?php echo $pendTotal <= 0 ? 'Pago' : ($recTotal > 0 ? 'Parcial' : 'Pendente'); ?></span></td>
-                                <td class="py-4 text-right font-bold text-sm"><?php echo formatReal($valTotal); ?></td>
+                                <td class="py-4 text-center"><div class="text-[9px] font-bold text-stone-500"><?php echo $qE; ?>/<?php echo $qT; ?></div><div class="w-20 bg-stone-100 h-1.5 rounded-full mx-auto"><div class="h-full bg-stone-900 rounded-full" style="width:<?php echo $qT > 0 ? ($qE / $qT * 100) : 0; ?>%"></div></div></td>
+                                <td class="py-4 text-center"><span class="px-2 py-0.5 rounded-full font-bold text-[9px] uppercase border <?php echo $pT <= 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : ($rT > 0 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-rose-50 text-rose-700 border-rose-200'); ?>"><?php echo $pT <= 0 ? 'Pago' : ($rT > 0 ? 'Parcial' : 'Pendente'); ?></span></td>
+                                <td class="py-4 text-right font-bold text-sm"><?php echo formatReal($vT); ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody></table></div>
