@@ -222,6 +222,7 @@ if (!isset($_SESSION['usuario_email'])) {
 // ----------------------------------------------------
 $remessas = [];
 $statsRemessas = ['valor_total' => 0.0, 'pecas_totais' => 0, 'pecas_entregues' => 0, 'valor_recebido' => 0.0, 'valor_pendente' => 0.0];
+$statsPorAno = [];
 
 if ($firestoreEnabled) {
     try {
@@ -245,8 +246,18 @@ if ($firestoreEnabled) {
             $statsRemessas['pecas_totais'] += $qtd;
             $statsRemessas['pecas_entregues'] += $ent;
             $statsRemessas['valor_recebido'] += $rec;
+
+            // Agrupamento por Ano para o Dashboard
+            $dataStr = $r['data_cadastro'] ?? $r['data'] ?? null;
+            $anoItem = $dataStr ? substr($dataStr, 0, 4) : 'Outros';
+            if (!isset($statsPorAno[$anoItem])) {
+                $statsPorAno[$anoItem] = ['total' => 0, 'recebido' => 0];
+            }
+            $statsPorAno[$anoItem]['total'] += $val;
+            $statsPorAno[$anoItem]['recebido'] += $rec;
         }
         $statsRemessas['valor_pendente'] = max(0, $statsRemessas['valor_total'] - $statsRemessas['valor_recebido']);
+        krsort($statsPorAno); // Ordena anos decrescente
     } catch (Throwable $e) { $msgError = 'Falha ao carregar: ' . $e->getMessage(); }
 }
 
@@ -380,9 +391,10 @@ function abreviarNome($n) {
                 <button onclick="toggleModal('modalCalendar')" class="px-4 py-2 bg-white border border-stone-200 rounded-xl text-xs font-bold text-stone-700 flex items-center gap-2 shadow-sm transition-all"><i data-lucide="filter" class="w-3.5 h-3.5"></i> <?php echo $filtroGeral ? 'Visão Geral' : getMesNome($filtroMes) . '/' . $filtroAno; ?></button>
             </section>
 
+            <!-- Cards de Totalizador Principal -->
             <section class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
                 <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm relative overflow-hidden">
-                    <div class="flex justify-between relative z-10"><div class="p-3 bg-stone-100 text-stone-900 rounded-2xl"><i data-lucide="trending-up" class="w-6 h-6"></i></div><span class="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Total</span></div>
+                    <div class="flex justify-between relative z-10"><div class="p-3 bg-stone-100 text-stone-900 rounded-2xl"><i data-lucide="trending-up" class="w-6 h-6"></i></div><span class="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Total Geral</span></div>
                     <p class="text-stone-400 font-bold text-[10px] mt-4 uppercase tracking-wider relative z-10">Faturamento Bruto</p>
                     <h3 class="text-3xl font-bold text-stone-900 font-serif mt-1 relative z-10"><?php echo formatReal($statsRemessas['valor_total']); ?></h3>
                 </div>
@@ -398,9 +410,30 @@ function abreviarNome($n) {
                 </div>
             </section>
 
+            <!-- Tabela de Faturamento por Ano -->
+            <?php if (!empty($statsPorAno)): ?>
+            <section class="mb-10">
+                <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm">
+                    <h2 class="text-xl font-bold text-stone-900 font-serif mb-6 flex items-center gap-2"><i data-lucide="history" class="w-5 h-5 text-stone-500"></i> Faturamento por Ano</h2>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <?php foreach ($statsPorAno as $ano => $s): ?>
+                            <div class="p-4 bg-stone-50 rounded-2xl border border-stone-150">
+                                <span class="text-lg font-bold text-stone-900"><?php echo $ano; ?></span>
+                                <div class="mt-2 space-y-1">
+                                    <div class="flex justify-between text-[10px] uppercase font-bold text-stone-400"><span>Bruto</span><span class="text-stone-900"><?php echo formatReal($s['total']); ?></span></div>
+                                    <div class="flex justify-between text-[10px] uppercase font-bold text-stone-400"><span>Pago</span><span class="text-emerald-600"><?php echo formatReal($s['recebido']); ?></span></div>
+                                    <div class="flex justify-between text-[10px] uppercase font-bold text-stone-400 pt-1 border-t border-stone-200"><span>Saldo</span><span class="text-rose-500"><?php echo formatReal($s['total'] - $s['recebido']); ?></span></div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </section>
+            <?php endif; ?>
+
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm lg:col-span-2">
-                    <h2 class="text-xl font-bold text-stone-900 font-serif mb-6 flex items-center gap-2"><i data-lucide="list-checks" class="w-5 h-5 text-stone-500"></i> Detalhamento</h2>
+                    <h2 class="text-xl font-bold text-stone-900 font-serif mb-6 flex items-center gap-2"><i data-lucide="list-checks" class="w-5 h-5 text-stone-500"></i> Últimos Registros</h2>
                     <div class="overflow-x-auto"><table class="min-w-full divide-y divide-stone-150">
                         <thead class="text-[10px] font-bold text-stone-400 uppercase tracking-wider"><tr><th class="py-3 text-left">Peça / Data</th><th class="py-3 text-center">Progresso</th><th class="py-3 text-center">Status</th><th class="py-3 text-right">Valor</th></tr></thead>
                         <tbody class="divide-y divide-stone-100 bg-white">
