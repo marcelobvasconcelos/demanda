@@ -271,7 +271,7 @@ function firestore_build_fields(array $data): array
             try {
                 $dt = new DateTime($value['__timestamp']);
                 $dt->setTimezone(new DateTimeZone('UTC'));
-                $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s.v\Z')];
+                $fields[$key] = ['timestampValue' => $dt->format('Y-m-d\TH:i:s\Z')];
             } catch (Throwable $e) { $fields[$key] = ['stringValue' => (string)$value['__timestamp']]; }
             continue;
         }
@@ -307,9 +307,11 @@ function firestore_get_user_uid_by_email(string $email): ?string
     } catch (Throwable $e) { return null; }
 }
 
-function firestore_query_remessas(string $email, string $startDate, string $endDate): array
+function firestore_query_remessas(string $email, string $startDate, string $endDate, ?string $uid = null): array
 {
-    $uid = firestore_get_user_uid_by_email($email);
+    if (!$uid) {
+        $uid = firestore_get_user_uid_by_email($email);
+    }
     if (!$uid) return [];
 
     $dt = new DateTime($startDate);
@@ -336,18 +338,26 @@ function firestore_query_remessas(string $email, string $startDate, string $endD
     } catch (Throwable $e) { return []; }
 }
 
-function firestore_get_all_user_remessas(string $email): array
+function firestore_get_all_user_remessas(string $email, ?string $uid = null): array
 {
-    $uid = firestore_get_user_uid_by_email($email);
+    if (!$uid) {
+        $uid = firestore_get_user_uid_by_email($email);
+    }
     if (!$uid) return [];
     
     $all = [];
     try {
         $serviceAccount = firestore_get_credentials();
         $parent = 'projects/' . $serviceAccount['project_id'] . '/databases/(default)/documents';
-        $resp = firestore_request('POST', 'documents:listCollectionIds', ['parent' => $parent, 'pageSize' => 500]);
         
-        foreach (($resp['collectionIds'] ?? []) as $col) {
+        // Otimização: Cache de IDs de coleções para evitar múltiplas chamadas pesadas
+        static $collectionsCache = null;
+        if ($collectionsCache === null) {
+            $resp = firestore_request('POST', 'documents:listCollectionIds', ['parent' => $parent, 'pageSize' => 500]);
+            $collectionsCache = $resp['collectionIds'] ?? [];
+        }
+        
+        foreach ($collectionsCache as $col) {
             if (str_ends_with($col, $uid)) {
                 try {
                     $dresp = firestore_request('GET', 'documents/' . rawurlencode($col) . '?pageSize=1000');
@@ -398,10 +408,12 @@ function firestore_add_remessa(array $data): void
         'valor_recebido' => 0.0,
         'usuario_email' => $data['usuario_email'],
         'usuario_nome' => $data['usuario_nome'],
+        'usuario_uid' => $uid,
+        'usuario_id' => $uid,
         'data_cadastro' => $dataCad
     ]);
 
-    firestore_request('POST', 'documents/' . rawurlencode($col) . '?documentId=' . $docId, ['fields' => $fields]);
+    firestore_request('POST', 'documents/' . rawurlencode($col) . '?documentId=' . rawurlencode($docId), ['fields' => $fields]);
 }
 
 function firestore_update_remessa(string $docId, array $data, string $col): void

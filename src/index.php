@@ -237,12 +237,13 @@ $statsPorAno = [];
 
 if ($firestoreEnabled) {
     try {
+        $userUid = $_SESSION['firebase_localId'] ?? null;
         if ($filtroGeral) {
-            $remessas = firestore_get_all_user_remessas($_SESSION['usuario_email']);
+            $remessas = firestore_get_all_user_remessas($_SESSION['usuario_email'], $userUid);
         } else {
             $startDate = sprintf('%s-%s-01', $filtroAno, str_pad($filtroMes, 2, '0', STR_PAD_LEFT));
             $endDate = sprintf('%s-%s-%s', $filtroAno, str_pad($filtroMes, 2, '0', STR_PAD_LEFT), date('t', strtotime($startDate)));
-            $remessas = firestore_query_remessas($_SESSION['usuario_email'], $startDate, $endDate);
+            $remessas = firestore_query_remessas($_SESSION['usuario_email'], $startDate, $endDate, $userUid);
         }
 
         foreach ($remessas as $r) {
@@ -368,7 +369,7 @@ function abreviarNome($n) {
                                         </button>
                                     </form>
                                 <?php endif; ?>
-                                <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qtd; ?>, <?php echo $prUnit; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
+                                <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qT; ?>, <?php echo $prU; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
                                 <button onclick="openUpdateQtd('<?php echo $r['id']; ?>', <?php echo $qE; ?>, <?php echo $qT; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $rec; ?>, <?php echo $prU; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 text-stone-600 flex items-center justify-center font-bold text-xs hover:bg-stone-50 cursor-pointer"><?php echo $perc >= 100 ? '<i data-lucide="check" class="w-4 h-4"></i>' : '+'; ?></button>
                                 <button onclick='openEditRemessa(<?php echo json_encode($r); ?>)' class="p-1.5 text-stone-400 hover:text-stone-900"><i data-lucide="pencil" class="w-4 h-4"></i></button>
                                 <form method="POST" onsubmit="return confirm('Deseja realmente excluir este lote?');" class="inline">
