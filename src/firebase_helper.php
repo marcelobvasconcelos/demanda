@@ -191,14 +191,52 @@ function firebase_auth_request(string $method, string $path, array $body = null)
     return $decoded ?: [];
 }
 
-function firebase_auth_sign_in_with_password(string $email, string $password): ?array
+function firebase_auth_sign_in_with_password(string $email, string $password): array
 {
-    $response = firebase_auth_request('POST', 'accounts:signInWithPassword', [
-        'email' => trim(strtolower($email)),
-        'password' => $password,
-        'returnSecureToken' => true,
-    ]);
-    return isset($response['localId']) ? $response : null;
+    try {
+        $response = firebase_auth_request('POST', 'accounts:signInWithPassword', [
+            'email' => trim(strtolower($email)),
+            'password' => $password,
+            'returnSecureToken' => true,
+        ]);
+        return [
+            'success' => isset($response['localId']),
+            'data' => $response,
+            'error' => null
+        ];
+    } catch (Throwable $e) {
+        $message = $e->getMessage();
+        $errorMsg = 'Erro ao realizar login.';
+        
+        if (strpos($message, 'INVALID_PASSWORD') !== false) {
+            $errorMsg = 'Senha incorreta. Por favor, tente novamente.';
+        } elseif (strpos($message, 'EMAIL_NOT_FOUND') !== false) {
+            $errorMsg = 'E-mail não encontrado.';
+        } elseif (strpos($message, 'USER_DISABLED') !== false) {
+            $errorMsg = 'Esta conta foi desativada.';
+        } elseif (strpos($message, 'TOO_MANY_ATTEMPTS_TRY_LATER') !== false) {
+            $errorMsg = 'Muitas tentativas bloqueadas. Tente mais tarde ou recupere sua senha.';
+        }
+        
+        return [
+            'success' => false,
+            'data' => null,
+            'error' => $errorMsg
+        ];
+    }
+}
+
+function firebase_auth_send_password_reset_email(string $email): bool
+{
+    try {
+        firebase_auth_request('POST', 'accounts:sendOobCode', [
+            'requestType' => 'PASSWORD_RESET',
+            'email' => trim(strtolower($email))
+        ]);
+        return true;
+    } catch (Throwable $e) {
+        return false;
+    }
 }
 
 function firestore_parse_value(array $value)

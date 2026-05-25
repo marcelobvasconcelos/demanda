@@ -58,7 +58,7 @@ if ($dbConnected && $pdo) {
     $lojas = $pdo->query("SELECT id, nome FROM lojas ORDER BY nome ASC")->fetchAll();
 }
 
-// Lógica de Abas e Filtros
+// Lógica de Abas e Filtros (Atualizado com correções de campos)
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'remessas';
 
 // Filtro de Mês/Ano
@@ -83,16 +83,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
             $msgError = 'E-mail e senha são obrigatórios.';
         } else {
             try {
-                $signInResult = firebase_auth_sign_in_with_password($email, $senha);
-                if ($signInResult && isset($signInResult['email'])) {
-                    $_SESSION['usuario_email'] = $signInResult['email'];
-                    $_SESSION['usuario_nome'] = $signInResult['displayName'] ?? $signInResult['email'];
-                    $_SESSION['firebase_localId'] = $signInResult['localId'] ?? null;
+                $loginResult = firebase_auth_sign_in_with_password($email, $senha);
+                if ($loginResult['success']) {
+                    $userData = $loginResult['data'];
+                    $_SESSION['usuario_email'] = $userData['email'];
+                    $_SESSION['usuario_nome'] = $userData['displayName'] ?? $userData['email'];
+                    $_SESSION['firebase_localId'] = $userData['localId'] ?? null;
                     $msgSuccess = 'Bem-vindo(a), ' . htmlspecialchars($_SESSION['usuario_nome']) . '!';
                 } else {
-                    $msgError = 'E-mail ou senha incorretos.';
+                    $msgError = $loginResult['error'] ?: 'E-mail ou senha incorretos.';
                 }
             } catch (Throwable $e) { $msgError = 'Erro no login: ' . $e->getMessage(); }
+        }
+    }
+
+    elseif ($action === 'forgot_password') {
+        $email = isset($_POST['email']) ? strtolower(trim($_POST['email'])) : '';
+        if ($email === '') {
+            $msgError = 'Digite seu e-mail para recuperar a senha.';
+        } else {
+            if (firebase_auth_send_password_reset_email($email)) {
+                $msgSuccess = 'E-mail de recuperação enviado! Verifique sua caixa de entrada.';
+            } else {
+                $msgError = 'Falha ao enviar e-mail. Verifique se o endereço está correto.';
+            }
         }
     }
 
@@ -220,10 +234,13 @@ if ($firestoreEnabled) {
         }
 
         foreach ($remessas as $r) {
-            $qtd = max(0, intval($r['quantidade'] ?? 0));
-            $ent = max(0, min(intval($r['qtd_entregue'] ?? 0), $qtd));
-            $val = $qtd * floatval($r['preco_unitario'] ?? 0);
+            // Normalização agressiva para garantir que dados de qualquer fonte (App/Web) sejam contados
+            $qtd = intval($r['quantidade'] ?? $r['qtd'] ?? 0);
+            $ent = intval($r['qtd_entregue'] ?? $r['entregue'] ?? 0);
+            $prU = floatval($r['preco_unitario'] ?? $r['precoU'] ?? 0);
+            $val = floatval($r['total'] ?? ($qtd * $prU));
             $rec = floatval($r['valor_recebido'] ?? 0);
+            
             $statsRemessas['valor_total'] += $val;
             $statsRemessas['pecas_totais'] += $qtd;
             $statsRemessas['pecas_entregues'] += $ent;
@@ -306,19 +323,20 @@ function abreviarNome($n) {
             <section class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
                 <?php if (empty($remessas)): ?><div class="col-span-full bg-white border border-stone-200 rounded-3xl p-12 text-center text-stone-500 font-medium">Nenhum lote encontrado para este período.</div><?php endif; ?>
                 <?php foreach ($remessas as $r): 
-                    $qtd = intval($r['quantidade'] ?? 0); $ent = intval($r['qtd_entregue'] ?? 0);
-                    $perc = $qtd > 0 ? round(($ent / $qtd) * 100) : 0;
-                    $prUnit = floatval($r['preco_unitario'] ?? 0);
-                    $total = $qtd * $prUnit;
+                    $qT = intval($r['quantidade'] ?? $r['qtd'] ?? 0);
+                    $qE = intval($r['qtd_entregue'] ?? $r['entregue'] ?? 0);
+                    $perc = $qT > 0 ? round(($qE / $qT) * 100) : 0;
+                    $prU = floatval($r['preco_unitario'] ?? $r['precoU'] ?? 0);
+                    $total = floatval($r['total'] ?? ($qT * $prU));
                     $rec = floatval($r['valor_recebido'] ?? 0);
                     $pend = max(0, $total - $rec);
                 ?>
                     <div class="bg-white border border-stone-200 hover:border-stone-300 rounded-2xl p-5 shadow-sm transition-all flex flex-col">
                         <div class="flex items-center justify-between mb-3">
-                            <span class="text-lg font-bold text-stone-900 capitalize"><?php echo $qtd; ?> <?php echo htmlspecialchars($r['peca_servico'] ?? 'Lote'); ?>(s)</span>
+                            <span class="text-lg font-bold text-stone-900 capitalize"><?php echo $qT; ?> <?php echo htmlspecialchars($r['peca_servico'] ?? 'Lote'); ?>(s)</span>
                             <div class="flex items-center gap-1.5">
-                                <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qtd; ?>, <?php echo $prUnit; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
-                                <button onclick="openUpdateQtd('<?php echo $r['id']; ?>', <?php echo $ent; ?>, <?php echo $qtd; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $rec; ?>, <?php echo $prUnit; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 text-stone-600 flex items-center justify-center font-bold text-xs hover:bg-stone-50 cursor-pointer"><?php echo $perc >= 100 ? '<i data-lucide="check" class="w-4 h-4"></i>' : '+'; ?></button>
+                                <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qT; ?>, <?php echo $prU; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
+                                <button onclick="openUpdateQtd('<?php echo $r['id']; ?>', <?php echo $qE; ?>, <?php echo $qT; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $rec; ?>, <?php echo $prU; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 text-stone-600 flex items-center justify-center font-bold text-xs hover:bg-stone-50 cursor-pointer"><?php echo $perc >= 100 ? '<i data-lucide="check" class="w-4 h-4"></i>' : '+'; ?></button>
                                 <button onclick='openEditRemessa(<?php echo json_encode($r); ?>)' class="p-1.5 text-stone-400 hover:text-stone-900"><i data-lucide="pencil" class="w-4 h-4"></i></button>
                                 <form method="POST" onsubmit="return confirm('Deseja realmente excluir este lote?');" class="inline">
                                     <input type="hidden" name="action" value="delete_remessa">
@@ -329,13 +347,13 @@ function abreviarNome($n) {
                             </div>
                         </div>
                         <div class="flex items-center justify-between mb-4 text-[10px] font-bold uppercase">
-                            <div class="flex items-center gap-2"><span class="text-stone-400">Tam:</span><span class="w-6 h-6 rounded-full border border-stone-200 flex items-center justify-center bg-stone-50"><?php echo htmlspecialchars($r['tamanho'] ?? '-'); ?></span></div>
+                            <div class="flex items-center gap-2"><span class="text-stone-400">Tam:</span><span class="w-6 h-6 rounded-full border border-stone-200 flex items-center justify-center bg-stone-50"><?php echo htmlspecialchars($r['tamanho'] ?? $r['size'] ?? '-'); ?></span></div>
                             <div class="text-right">
                                 <div class="text-emerald-600">Rec: <?php echo formatReal($rec); ?></div>
                                 <?php if ($pend > 0): ?><div class="text-rose-500">Falta: <?php echo formatReal($pend); ?></div><?php endif; ?>
                             </div>
                         </div>
-                        <div class="flex justify-between text-[10px] text-stone-400 font-bold mb-1"><span><?php echo formatDate($r['data_cadastro'] ?? null); ?></span><span><?php echo $ent; ?>/<?php echo $qtd; ?></span></div>
+                        <div class="flex justify-between text-[10px] text-stone-400 font-bold mb-1"><span><?php echo formatDate($r['data_cadastro'] ?? $r['data'] ?? null); ?></span><span><?php echo $qE; ?>/<?php echo $qT; ?></span></div>
                         <div class="w-full bg-stone-100 rounded-full h-1.5 overflow-hidden"><div class="h-full <?php echo $perc >= 100 ? 'bg-emerald-500' : 'bg-stone-900'; ?>" style="width: <?php echo $perc; ?>%"></div></div>
                     </div>
                 <?php endforeach; ?>
@@ -358,14 +376,26 @@ function abreviarNome($n) {
 
         <?php elseif ($activeTab === 'dashboard'): ?>
             <section class="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div><h1 class="text-3xl font-serif font-bold text-stone-900 tracking-tight">Dashboard de Demanda</h1><p class="text-stone-500 mt-1 text-sm">Faturamento consolidado puxado do Firebase.</p></div>
+                <div><h1 class="text-3xl font-serif font-bold text-stone-900 tracking-tight">Dashboard de Demanda</h1><p class="text-stone-50 mt-1 text-sm">Faturamento consolidado puxado do Firebase.</p></div>
                 <button onclick="toggleModal('modalCalendar')" class="px-4 py-2 bg-white border border-stone-200 rounded-xl text-xs font-bold text-stone-700 flex items-center gap-2 shadow-sm transition-all"><i data-lucide="filter" class="w-3.5 h-3.5"></i> <?php echo $filtroGeral ? 'Visão Geral' : getMesNome($filtroMes) . '/' . $filtroAno; ?></button>
             </section>
 
             <section class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-                <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm"><div class="flex justify-between"><div class="p-3 bg-stone-100 text-stone-900 rounded-2xl"><i data-lucide="trending-up" class="w-6 h-6"></i></div><span class="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Total</span></div><p class="text-stone-400 font-bold text-[10px] mt-4 uppercase tracking-wider">Faturamento Bruto</p><h3 class="text-3xl font-bold text-stone-900 font-serif mt-1"><?php echo formatReal($statsRemessas['valor_total']); ?></h3></div>
-                <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm"><div class="flex justify-between"><div class="p-3 bg-emerald-50 text-emerald-600 rounded-2xl"><i data-lucide="wallet" class="w-6 h-6"></i></div><span class="text-[9px] font-bold text-emerald-700 uppercase tracking-widest">Pago</span></div><p class="text-stone-400 font-bold text-[10px] mt-4 uppercase tracking-wider">Total Recebido</p><h3 class="text-3xl font-bold text-stone-900 font-serif mt-1"><?php echo formatReal($statsRemessas['valor_recebido']); ?></h3></div>
-                <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm"><div class="flex justify-between"><div class="p-3 bg-rose-50 text-rose-600 rounded-2xl"><i data-lucide="hand-coins" class="w-6 h-6"></i></div><span class="text-[9px] font-bold text-rose-700 uppercase tracking-widest">Pendente</span></div><p class="text-stone-400 font-bold text-[10px] mt-4 uppercase tracking-wider">A Receber</p><h3 class="text-3xl font-bold text-stone-900 font-serif mt-1"><?php echo formatReal($statsRemessas['valor_pendente']); ?></h3></div>
+                <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm relative overflow-hidden">
+                    <div class="flex justify-between relative z-10"><div class="p-3 bg-stone-100 text-stone-900 rounded-2xl"><i data-lucide="trending-up" class="w-6 h-6"></i></div><span class="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Total</span></div>
+                    <p class="text-stone-400 font-bold text-[10px] mt-4 uppercase tracking-wider relative z-10">Faturamento Bruto</p>
+                    <h3 class="text-3xl font-bold text-stone-900 font-serif mt-1 relative z-10"><?php echo formatReal($statsRemessas['valor_total']); ?></h3>
+                </div>
+                <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm relative overflow-hidden">
+                    <div class="flex justify-between relative z-10"><div class="p-3 bg-emerald-50 text-emerald-600 rounded-2xl"><i data-lucide="wallet" class="w-6 h-6"></i></div><span class="text-[9px] font-bold text-emerald-700 uppercase tracking-widest">Pago</span></div>
+                    <p class="text-stone-400 font-bold text-[10px] mt-4 uppercase tracking-wider relative z-10">Total Recebido</p>
+                    <h3 class="text-3xl font-bold text-stone-900 font-serif mt-1 relative z-10"><?php echo formatReal($statsRemessas['valor_recebido']); ?></h3>
+                </div>
+                <div class="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm relative overflow-hidden">
+                    <div class="flex justify-between relative z-10"><div class="p-3 bg-rose-50 text-rose-600 rounded-2xl"><i data-lucide="hand-coins" class="w-6 h-6"></i></div><span class="text-[9px] font-bold text-rose-700 uppercase tracking-widest">Pendente</span></div>
+                    <p class="text-stone-400 font-bold text-[10px] mt-4 uppercase tracking-wider relative z-10">A Receber</p>
+                    <h3 class="text-3xl font-bold text-stone-900 font-serif mt-1 relative z-10"><?php echo formatReal($statsRemessas['valor_pendente']); ?></h3>
+                </div>
             </section>
 
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -375,15 +405,15 @@ function abreviarNome($n) {
                         <thead class="text-[10px] font-bold text-stone-400 uppercase tracking-wider"><tr><th class="py-3 text-left">Peça / Data</th><th class="py-3 text-center">Progresso</th><th class="py-3 text-center">Status</th><th class="py-3 text-right">Valor</th></tr></thead>
                         <tbody class="divide-y divide-stone-100 bg-white">
                         <?php foreach (array_slice($remessas, 0, 10) as $r): 
-                            $qT = intval($r['quantidade'] ?? 0);
-                            $pU = floatval($r['preco_unitario'] ?? 0);
-                            $vT = $qT * $pU; 
+                            $qT = intval($r['quantidade'] ?? $r['qtd'] ?? 0);
+                            $pU = floatval($r['preco_unitario'] ?? $r['precoU'] ?? 0);
+                            $vT = floatval($r['total'] ?? ($qT * $pU)); 
                             $rT = floatval($r['valor_recebido'] ?? 0); 
                             $pT = max(0, $vT - $rT); 
-                            $qE = intval($r['qtd_entregue'] ?? 0);
+                            $qE = intval($r['qtd_entregue'] ?? $r['entregue'] ?? 0);
                         ?>
                             <tr class="hover:bg-stone-50/50 transition-colors">
-                                <td class="py-4"><div class="font-bold text-stone-900 text-sm capitalize"><?php echo htmlspecialchars($r['peca_servico'] ?? 'Lote'); ?></div><div class="text-stone-400 text-[9px]"><?php echo formatDate($r['data_cadastro'] ?? null); ?></div></td>
+                                <td class="py-4"><div class="font-bold text-stone-900 text-sm capitalize"><?php echo htmlspecialchars($r['peca_servico'] ?? 'Lote'); ?></div><div class="text-stone-400 text-[9px]"><?php echo formatDate($r['data_cadastro'] ?? $r['data'] ?? null); ?></div></td>
                                 <td class="py-4 text-center"><div class="text-[9px] font-bold text-stone-500"><?php echo $qE; ?>/<?php echo $qT; ?></div><div class="w-20 bg-stone-100 h-1.5 rounded-full mx-auto"><div class="h-full bg-stone-900 rounded-full" style="width:<?php echo $qT > 0 ? ($qE / $qT * 100) : 0; ?>%"></div></div></td>
                                 <td class="py-4 text-center"><span class="px-2 py-0.5 rounded-full font-bold text-[9px] uppercase border <?php echo $pT <= 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : ($rT > 0 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-rose-50 text-rose-700 border-rose-200'); ?>"><?php echo $pT <= 0 ? 'Pago' : ($rT > 0 ? 'Parcial' : 'Pendente'); ?></span></td>
                                 <td class="py-4 text-right font-bold text-sm"><?php echo formatReal($vT); ?></td>
@@ -467,9 +497,9 @@ function abreviarNome($n) {
         function setQtdRestante() { document.getElementById('updateQtdAdicionar').value = maxLoteAtual - entAtu; }
         function openEditRemessa(r) {
             document.getElementById('editRemessaId').value=r.id; document.getElementById('editRemessaCollection').value=r.__collection;
-            document.getElementById('editRemessaPeca').value=r.peca_servico; document.getElementById('editRemessaPreco').value=r.preco_unitario;
-            document.getElementById('editRemessaQtd').value=r.quantidade;
-            const rad=document.getElementById('editRemessaTamanho_'+(r.tamanho||'outro')); if(rad) rad.checked=true;
+            document.getElementById('editRemessaPeca').value=r.peca_servico || r.peca; document.getElementById('editRemessaPreco').value=r.preco_unitario || r.precoU;
+            document.getElementById('editRemessaQtd').value=r.quantidade || r.qtd;
+            const rad=document.getElementById('editRemessaTamanho_'+(r.tamanho||r.size||'outro')); if(rad) rad.checked=true;
             toggleModal('modalEditRemessa');
         }
         function adjustFilterYear(d) { activeFilterYear+=d; document.getElementById('calendarYearLabel').innerText=activeFilterYear; }
