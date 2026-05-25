@@ -181,6 +181,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
         } catch (Throwable $e) { $msgError = 'Erro: ' . $e->getMessage(); }
     }
 
+    elseif ($action === 'mark_paid_full') {
+        $docId = trim($_POST['id'] ?? '');
+        $collection = trim($_POST['collection'] ?? '');
+        $totalLote = floatval($_POST['total_lote'] ?? 0);
+
+        try {
+            firestore_update_remessa($docId, ['valor_recebido' => $totalLote], $collection);
+            $msgSuccess = 'Lote marcado como totalmente pago!';
+        } catch (Throwable $e) { $msgError = 'Erro: ' . $e->getMessage(); }
+    }
+
     elseif ($action === 'edit_remessa') {
         $docId = $_POST['id'];
         $collection = $_POST['collection'];
@@ -346,7 +357,18 @@ function abreviarNome($n) {
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-lg font-bold text-stone-900 capitalize"><?php echo $qT; ?> <?php echo htmlspecialchars($r['peca_servico'] ?? 'Lote'); ?>(s)</span>
                             <div class="flex items-center gap-1.5">
-                                <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qT; ?>, <?php echo $prU; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
+                                <?php if ($pend > 0): ?>
+                                    <form method="POST" class="inline" onsubmit="return confirm('Confirmar recebimento total deste lote?');">
+                                        <input type="hidden" name="action" value="mark_paid_full">
+                                        <input type="hidden" name="id" value="<?php echo $r['id']; ?>">
+                                        <input type="hidden" name="collection" value="<?php echo $r['__collection'] ?? 'remessas'; ?>">
+                                        <input type="hidden" name="total_lote" value="<?php echo $total; ?>">
+                                        <button type="submit" class="w-8 h-8 rounded-full border-2 border-emerald-500 bg-emerald-500 text-white flex items-center justify-center font-bold text-xs hover:bg-emerald-600 cursor-pointer transition-colors" title="Receber Tudo">
+                                            <i data-lucide="check-check" class="w-4 h-4"></i>
+                                        </button>
+                                    </form>
+                                <?php endif; ?>
+                                <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>', <?php echo $rec; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $qtd; ?>, <?php echo $prUnit; ?>)" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-500 flex items-center justify-center font-bold text-xs hover:bg-emerald-50 cursor-pointer">$</button>
                                 <button onclick="openUpdateQtd('<?php echo $r['id']; ?>', <?php echo $qE; ?>, <?php echo $qT; ?>, '<?php echo $r['__collection'] ?? 'remessas'; ?>', <?php echo $rec; ?>, <?php echo $prU; ?>)" class="w-8 h-8 rounded-full border-2 border-stone-300 text-stone-600 flex items-center justify-center font-bold text-xs hover:bg-stone-50 cursor-pointer"><?php echo $perc >= 100 ? '<i data-lucide="check" class="w-4 h-4"></i>' : '+'; ?></button>
                                 <button onclick='openEditRemessa(<?php echo json_encode($r); ?>)' class="p-1.5 text-stone-400 hover:text-stone-900"><i data-lucide="pencil" class="w-4 h-4"></i></button>
                                 <form method="POST" onsubmit="return confirm('Deseja realmente excluir este lote?');" class="inline">
