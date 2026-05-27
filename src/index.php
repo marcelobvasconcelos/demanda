@@ -346,7 +346,7 @@ function abreviarNome($n) { $p = explode(' ', trim($n)); return count($p) > 1 ? 
                     <table class="w-full text-left">
                         <thead class="text-[10px] text-stone-400 font-bold uppercase border-b"> <tr><th class="pb-3">Lote</th><th class="pb-3 text-center">Progresso</th><th class="pb-3 text-right">Valor</th></tr> </thead>
                         <tbody class="divide-y text-sm">
-                            <?php foreach (array_slice($remessas, 0, 10) as $r): $v=$intval($r['quantidade']??$r['qtd']??0)*floatval($r['preco_unitario']??$r['precoU']??0); ?>
+                            <?php foreach (array_slice($remessas, 0, 10) as $r): $v=intval($r['quantidade']??$r['qtd']??0)*floatval($r['preco_unitario']??$r['precoU']??0); ?>
                             <tr>
                                 <td class="py-4 font-bold capitalize"><?php echo htmlspecialchars($r['peca_servico']??'Lote'); ?><div class="text-[10px] font-normal text-stone-400"><?php echo formatDate($r['data_cadastro']??null); ?></div></td>
                                 <td class="py-4 text-center text-xs font-bold text-stone-600"><?php echo intval($r['qtd_entregue']??0); ?>/<?php echo intval($r['quantidade']??0); ?></td>
