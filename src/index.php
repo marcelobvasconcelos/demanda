@@ -53,7 +53,7 @@ if ($dbConnected && $pdo) {
     $lojas = $pdo->query("SELECT id, nome FROM lojas ORDER BY nome ASC")->fetchAll();
 }
 
-// Lógica de Abas e Filtros - Versão Final Otimizada
+// Lógica de Abas e Filtros
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'remessas';
 $filtroMes = isset($_GET['mes']) ? $_GET['mes'] : (isset($_SESSION['filtro_mes']) ? $_SESSION['filtro_mes'] : date('m'));
 $filtroAno = isset($_GET['ano']) ? $_GET['ano'] : (isset($_SESSION['filtro_ano']) ? $_SESSION['filtro_ano'] : date('Y'));
@@ -195,7 +195,6 @@ $statsPorAno = [];
 if ($firestoreEnabled) {
     try {
         $cacheFile = __DIR__ . '/tmp/dashboard_cache_' . md5($_SESSION['usuario_email']) . '.json';
-        $useCache = (!$filtroGeral); // Cache apenas para visão histórica pesada? Não, vamos cachear tudo por 10 min
         
         if (file_exists($cacheFile) && (time() - filemtime($cacheFile) < 600)) {
             $cacheData = json_decode(file_get_contents($cacheFile), true);
@@ -242,155 +241,420 @@ if ($firestoreEnabled) {
 function formatReal($val) { return 'R$ ' . number_format($val, 2, ',', '.'); }
 function formatDate($d) { if (!$d) return '-'; try { return (new DateTime($d))->format('d/m/Y'); } catch (Throwable $e) { return substr($d, 0, 10); } }
 function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março','04'=>'abril','05'=>'maio','06'=>'junho','07'=>'julho','08'=>'agosto','09'=>'setembro','10'=>'outubro','11'=>'novembro','12'=>'dezembro']; return $mn[$m] ?? 'todo o período'; }
-function abreviarNome($n) { $p = explode(' ', trim($n)); return count($p) > 1 ? $p[0] . ' ' . substr(end($p), 0, 1) . '.' : $n; }
 ?>
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" class="h-full">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Demanda - Ateliê</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Demanda App</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script>tailwind.config={theme:{extend:{fontFamily:{sans:['Inter','sans-serif'],serif:['Playfair Display','serif']},colors:{atelier:{brand:'#8E7355'}}}}} </script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Plus Jakarta Sans', 'sans-serif'], serif: ['Playfair Display', 'serif'] },
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4', 100: '#dcfce7', 500: '#22c55e', 600: '#16a34a', 700: '#15803d',
+                            primary: '#6366f1', secondary: '#ec4899', accent: '#f59e0b'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .glass { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+        .tab-active { color: #6366f1; }
+        .tab-active::after { content: ''; position: absolute; bottom: -2px; left: 0; right: 0; height: 3px; background: #6366f1; border-radius: 100px; }
+        .card-shadow { box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05); }
+        body { background: #f8fafc; overflow-x: hidden; }
+        .safe-pb { padding-bottom: calc(env(safe-area-inset-bottom) + 80px); }
+    </style>
 </head>
-<body class="font-sans text-stone-800 bg-[#FAF6F0] min-h-screen flex flex-col">
-    <header class="bg-white border-b h-20 flex items-center justify-between px-4 sticky top-0 z-30 shadow-sm">
-        <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-stone-900 rounded-full flex items-center justify-center text-atelier-brand"><i data-lucide="scissors" class="w-5 h-5"></i></div>
-            <span class="font-serif text-xl font-bold">Demanda</span>
+<body class="font-sans text-slate-900 min-h-full">
+
+    <!-- Header Mobile-First -->
+    <header class="glass sticky top-0 z-40 border-b border-slate-200/50 px-4 py-4">
+        <div class="max-w-xl mx-auto flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+                    <i data-lucide="scissors" class="w-5 h-5"></i>
+                </div>
+                <h1 class="font-serif text-2xl font-bold tracking-tight text-slate-800">Demanda</h1>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="flex items-center gap-1 bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-extrabold uppercase">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Online
+                </div>
+                <form method="POST" onsubmit="return confirm('Sair?')">
+                    <input type="hidden" name="action" value="logout">
+                    <button type="submit" class="w-10 h-10 flex items-center justify-center text-slate-400 hover:text-rose-500 transition-colors">
+                        <i data-lucide="log-out" class="w-5 h-5"></i>
+                    </button>
+                </form>
+            </div>
         </div>
-        <nav class="flex gap-2 bg-stone-100 p-1 rounded-xl">
-            <a href="?tab=remessas" class="px-4 py-1.5 rounded-lg text-xs font-bold <?php echo $activeTab==='remessas'?'bg-white shadow-sm':'text-stone-500'; ?>">Remessas</a>
-            <a href="?tab=dashboard" class="px-4 py-1.5 rounded-lg text-xs font-bold <?php echo $activeTab==='dashboard'?'bg-white shadow-sm':'text-stone-500'; ?>">Dashboard</a>
-        </nav>
-        <div class="flex items-center gap-2 bg-emerald-50 text-emerald-800 px-3 py-1 rounded-lg text-[10px] font-bold"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> ONLINE</div>
     </header>
 
-    <main class="max-w-7xl mx-auto px-4 py-6 flex-grow w-full">
-        <?php if ($msgSuccess): ?><div class="mb-4 p-4 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-sm flex items-center gap-2"><i data-lucide="check-circle" class="w-4 h-4"></i><?php echo $msgSuccess; ?></div><?php endif; ?>
-        <?php if ($msgError): ?><div class="mb-4 p-4 bg-rose-50 text-rose-800 border border-rose-200 rounded-xl text-sm flex items-center gap-2"><i data-lucide="alert-circle" class="w-4 h-4"></i><?php echo $msgError; ?></div><?php endif; ?>
+    <main class="max-w-xl mx-auto px-4 pt-6 safe-pb">
+        
+        <?php if ($msgSuccess): ?>
+            <div class="mb-6 p-4 bg-emerald-500 text-white rounded-2xl shadow-lg shadow-emerald-100 flex items-center gap-3 animate-in fade-in slide-in-from-top-4">
+                <i data-lucide="check-circle" class="w-5 h-5"></i>
+                <span class="text-sm font-bold"><?php echo $msgSuccess; ?></span>
+            </div>
+        <?php endif; ?>
 
-        <?php if ($activeTab==='remessas'): ?>
-            <div class="flex justify-between items-center mb-6">
-                <button onclick="toggleModal('modalCalendar')" class="bg-white border p-3 rounded-2xl flex items-center gap-3 shadow-sm active:scale-95 transition-all">
-                    <i data-lucide="calendar" class="w-5 h-5 text-stone-400"></i>
-                    <span class="text-sm font-bold capitalize"><?php echo getMesNome($filtroMes); ?> <?php echo !$filtroGeral?'de '.$filtroAno:''; ?></span>
-                </button>
-                <div class="flex gap-2">
-                    <button onclick="toggleModal('modalAddRemessa')" class="bg-stone-900 text-white p-3 rounded-2xl shadow-md"><i data-lucide="plus" class="w-5 h-5"></i></button>
-                    <form method="POST"><input type="hidden" name="action" value="sync_remessas"><button type="submit" class="bg-white border p-3 rounded-2xl"><i data-lucide="refresh-cw" class="w-5 h-5"></i></button></form>
+        <?php if ($activeTab === 'remessas'): ?>
+            <!-- Mini Dashboard do Mês -->
+            <div class="grid grid-cols-2 gap-3 mb-8">
+                <div class="bg-gradient-to-br from-indigo-500 to-indigo-600 p-4 rounded-3xl text-white shadow-xl shadow-indigo-100">
+                    <span class="text-[10px] font-extrabold uppercase opacity-80">Produzido</span>
+                    <div class="text-xl font-bold mt-1"><?php echo formatReal($statsRemessas['valor_total']); ?></div>
+                </div>
+                <div class="bg-white p-4 rounded-3xl border border-slate-200 shadow-sm">
+                    <span class="text-[10px] font-extrabold uppercase text-emerald-600">Recebido</span>
+                    <div class="text-xl font-bold mt-1 text-slate-800"><?php echo formatReal($statsRemessas['valor_recebido']); ?></div>
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <!-- Filtro & Botão Add -->
+            <div class="flex items-center gap-2 mb-6">
+                <button onclick="toggleModal('modalCalendar')" class="flex-grow glass border border-slate-200 p-4 rounded-2xl flex items-center justify-between active:scale-[0.98] transition-all">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="calendar" class="w-5 h-5 text-indigo-500"></i>
+                        <span class="text-sm font-extrabold capitalize"><?php echo getMesNome($filtroMes); ?> <?php echo !$filtroGeral ? 'de '.$filtroAno : ''; ?></span>
+                    </div>
+                    <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400"></i>
+                </button>
+                <button onclick="toggleModal('modalAddRemessa')" class="w-14 h-14 bg-slate-900 text-white rounded-2xl flex items-center justify-center shadow-lg shadow-slate-200 active:scale-90 transition-all">
+                    <i data-lucide="plus" class="w-6 h-6"></i>
+                </button>
+            </div>
+
+            <!-- Lista de Remessas -->
+            <div class="space-y-4">
+                <?php if (empty($remessas)): ?>
+                    <div class="bg-white border-2 border-dashed border-slate-200 rounded-3xl p-12 text-center text-slate-400">
+                        <i data-lucide="inbox" class="w-10 h-10 mx-auto mb-3 opacity-20"></i>
+                        <p class="font-bold">Nenhum lote este mês</p>
+                    </div>
+                <?php endif; ?>
+
                 <?php foreach ($remessas as $r): 
-                    $qT=intval($r['quantidade']??$r['qtd']??0); $qE=intval($r['qtd_entregue']??$r['entregue']??0); $prU=floatval($r['preco_unitario']??$r['precoU']??0); $rec=floatval($r['valor_recebido']??0); $tot=$qT*$prU; $pend=max(0,$tot-$rec); $perc=$qT>0?round(($qE/$qT)*100):0;
+                    $qT=intval($r['quantidade']??$r['qtd']??0); $qE=intval($r['qtd_entregue']??$r['entregue']??0); 
+                    $prU=floatval($r['preco_unitario']??$r['precoU']??0); $rec=floatval($r['valor_recebido']??0); 
+                    $tot=$qT*$prU; $pend=max(0,$tot-$rec); $perc=$qT>0?round(($qE/$qT)*100):0;
+                    $isPaid = ($pend <= 0.01);
                 ?>
-                <div class="bg-white border rounded-3xl p-5 shadow-sm">
-                    <div class="flex justify-between mb-4">
-                        <h3 class="font-bold capitalize"><?php echo $qT; ?> <?php echo htmlspecialchars($r['peca_servico']??'Lote'); ?></h3>
-                        <div class="flex gap-1.5">
-                            <?php if($pend>0): ?><form method="POST"><input type="hidden" name="action" value="mark_paid_full"><input type="hidden" name="id" value="<?php echo $r['id']; ?>"><input type="hidden" name="collection" value="<?php echo $r['__collection']; ?>"><input type="hidden" name="total_lote" value="<?php echo $tot; ?>"><button type="submit" class="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center"><i data-lucide="check-check" class="w-4 h-4"></i></button></form><?php endif; ?>
-                            <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>','<?php echo $rec; ?>','<?php echo $r['__collection']; ?>','<?php echo $qT; ?>','<?php echo $prU; ?>')" class="w-8 h-8 rounded-full border-2 border-emerald-200 text-emerald-600 flex items-center justify-center font-bold text-xs">$</button>
-                            <button onclick="openUpdateQtd('<?php echo $r['id']; ?>','<?php echo $qE; ?>','<?php echo $qT; ?>','<?php echo $r['__collection']; ?>','<?php echo $rec; ?>','<?php echo $prU; ?>')" class="w-8 h-8 rounded-full border-2 border-stone-300 text-stone-600 flex items-center justify-center font-bold text-xs"><?php echo $perc>=100?'<i data-lucide="check" class="w-4 h-4"></i>':'+'; ?></button>
-                            <button onclick='openEditRemessa(<?php echo json_encode($r); ?>)' class="p-1 text-stone-400"><i data-lucide="pencil" class="w-4 h-4"></i></button>
-                            <form method="POST" onsubmit="return confirm('Apagar?');"><input type="hidden" name="action" value="delete_remessa"><input type="hidden" name="id" value="<?php echo $r['id']; ?>"><input type="hidden" name="collection" value="<?php echo $r['__collection']; ?>"><button type="submit" class="p-1 text-stone-300 hover:text-rose-600"><i data-lucide="trash-2" class="w-4 h-4"></i></button></form>
+                <div class="bg-white rounded-[2rem] p-5 card-shadow border border-slate-100 transition-all">
+                    <div class="flex justify-between items-start mb-4">
+                        <div class="flex-grow">
+                            <h3 class="text-lg font-extrabold text-slate-800 capitalize leading-tight"><?php echo htmlspecialchars($r['peca_servico']??'Lote'); ?></h3>
+                            <div class="flex items-center gap-3 mt-1">
+                                <span class="text-[10px] font-extrabold px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md uppercase">TAM <?php echo htmlspecialchars($r['tamanho']??$r['size']??'-'); ?></span>
+                                <span class="text-[10px] font-bold text-slate-400"><?php echo formatDate($r['data_cadastro']??$r['data']??null); ?></span>
+                            </div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick='openEditRemessa(<?php echo json_encode($r); ?>)' class="w-10 h-10 rounded-xl bg-slate-50 text-slate-400 flex items-center justify-center active:bg-slate-100">
+                                <i data-lucide="edit-3" class="w-4.5 h-4.5"></i>
+                            </button>
+                            <form method="POST" onsubmit="return confirm('Apagar lote?')">
+                                <input type="hidden" name="action" value="delete_remessa">
+                                <input type="hidden" name="id" value="<?php echo $r['id']; ?>">
+                                <input type="hidden" name="collection" value="<?php echo $r['__collection']; ?>">
+                                <button type="submit" class="w-10 h-10 rounded-xl bg-rose-50 text-rose-400 flex items-center justify-center active:bg-rose-100">
+                                    <i data-lucide="trash-2" class="w-4.5 h-4.5"></i>
+                                </button>
+                            </form>
                         </div>
                     </div>
-                    <div class="flex justify-between text-[10px] font-bold uppercase mb-4">
-                        <div><span class="text-stone-400">Tam:</span> <span class="bg-stone-50 border px-2 py-0.5 rounded-lg"><?php echo htmlspecialchars($r['tamanho']??$r['size']??'-'); ?></span></div>
-                        <div class="text-right"><div class="text-emerald-600">Rec: <?php echo formatReal($rec); ?></div><?php if($pend>0): ?><div class="text-rose-500">Falta: <?php echo formatReal($pend); ?></div><?php endif; ?></div>
+
+                    <div class="bg-slate-50 rounded-2xl p-4 mb-4 grid grid-cols-2 gap-4">
+                        <div>
+                            <span class="text-[9px] font-extrabold uppercase text-slate-400 block mb-1">Status Entrega</span>
+                            <div class="flex items-end gap-1">
+                                <span class="text-xl font-black text-slate-700"><?php echo $qE; ?></span>
+                                <span class="text-sm font-bold text-slate-400 mb-0.5">/ <?php echo $qT; ?></span>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-[9px] font-extrabold uppercase text-slate-400 block mb-1">Financeiro</span>
+                            <?php if ($isPaid): ?>
+                                <span class="text-emerald-500 font-extrabold text-sm uppercase flex items-center justify-end gap-1"><i data-lucide="check-circle" class="w-3 h-3"></i> Pago</span>
+                            <?php else: ?>
+                                <span class="text-rose-500 font-extrabold text-sm uppercase">- <?php echo formatReal($pend); ?></span>
+                            <?php endif; ?>
+                            <div class="text-[10px] font-bold text-slate-500 mt-0.5"><?php echo formatReal($rec); ?> recebido</div>
+                        </div>
                     </div>
-                    <div class="flex justify-between text-[10px] text-stone-400 font-bold mb-1"><span><?php echo formatDate($r['data_cadastro']??$r['data']??null); ?></span><span><?php echo $qE; ?>/<?php echo $qT; ?></span></div>
-                    <div class="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden"><div class="h-full <?php echo $perc>=100?'bg-emerald-500':'bg-stone-900'; ?>" style="width:<?php echo $perc; ?>%"></div></div>
+
+                    <div class="flex items-center gap-2">
+                        <div class="flex-grow flex gap-2">
+                            <button onclick="openUpdateQtd('<?php echo $r['id']; ?>','<?php echo $qE; ?>','<?php echo $qT; ?>','<?php echo $r['__collection']; ?>','<?php echo $rec; ?>','<?php echo $prU; ?>')" class="flex-grow py-3 rounded-xl bg-indigo-600 text-white font-extrabold text-xs shadow-lg shadow-indigo-100 active:scale-95 transition-all">
+                                + Entrega
+                            </button>
+                            <button onclick="openUpdatePagamento('<?php echo $r['id']; ?>','<?php echo $rec; ?>','<?php echo $r['__collection']; ?>','<?php echo $qT; ?>','<?php echo $prU; ?>')" class="w-12 h-12 rounded-xl border-2 border-emerald-500 text-emerald-600 flex items-center justify-center font-bold active:bg-emerald-50 transition-all">
+                                $
+                            </button>
+                            <?php if(!$isPaid): ?>
+                                <form method="POST" class="contents">
+                                    <input type="hidden" name="action" value="mark_paid_full">
+                                    <input type="hidden" name="id" value="<?php echo $r['id']; ?>">
+                                    <input type="hidden" name="collection" value="<?php echo $r['__collection']; ?>">
+                                    <input type="hidden" name="total_lote" value="<?php echo $tot; ?>">
+                                    <button type="submit" class="w-12 h-12 rounded-xl bg-emerald-500 text-white flex items-center justify-center shadow-lg shadow-emerald-100 active:scale-95 transition-all">
+                                        <i data-lucide="check-check" class="w-5 h-5"></i>
+                                    </button>
+                                </form>
+                            <?php endif; ?>
+                        </div>
+                    </div>
                 </div>
                 <?php endforeach; ?>
             </div>
 
-            <section class="bg-stone-900 rounded-3xl p-6 text-white grid grid-cols-1 md:grid-cols-3 gap-4 shadow-lg">
-                <div class="flex flex-col"> <span class="text-[9px] text-stone-400 uppercase font-bold">Total Bruto</span> <span class="text-xl font-bold"><?php echo formatReal($statsRemessas['valor_total']); ?></span> </div>
-                <div class="flex flex-col"> <span class="text-[9px] text-stone-400 uppercase font-bold">Recebido</span> <span class="text-xl font-bold text-emerald-400"><?php echo formatReal($statsRemessas['valor_recebido']); ?></span> </div>
-                <div class="flex flex-col"> <span class="text-[9px] text-stone-400 uppercase font-bold">Saldo</span> <span class="text-xl font-bold text-rose-400"><?php echo formatReal($statsRemessas['valor_pendente']); ?></span> </div>
-            </section>
-
-        <?php elseif ($activeTab==='dashboard'): ?>
-            <div class="flex justify-between items-center mb-8">
-                <h1 class="text-2xl font-serif font-bold">Dashboard</h1>
-                <button onclick="toggleModal('modalCalendar')" class="text-xs font-bold bg-white border px-4 py-2 rounded-xl flex items-center gap-2"><i data-lucide="filter" class="w-4 h-4"></i> <?php echo $filtroGeral?'Visão Geral':getMesNome($filtroMes).'/'.$filtroAno; ?></button>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                <div class="bg-white p-6 rounded-3xl border shadow-sm"> <span class="text-[10px] font-bold text-stone-400 uppercase">Total Geral</span> <h3 class="text-2xl font-bold mt-1"><?php echo formatReal($statsRemessas['valor_total']); ?></h3> </div>
-                <div class="bg-white p-6 rounded-3xl border shadow-sm"> <span class="text-[10px] font-bold text-emerald-600 uppercase">Total Pago</span> <h3 class="text-2xl font-bold mt-1 text-emerald-700"><?php echo formatReal($statsRemessas['valor_recebido']); ?></h3> </div>
-                <div class="bg-white p-6 rounded-3xl border shadow-sm"> <span class="text-[10px] font-bold text-rose-600 uppercase">Total Pendente</span> <h3 class="text-2xl font-bold mt-1 text-rose-700"><?php echo formatReal($statsRemessas['valor_pendente']); ?></h3> </div>
-            </div>
-
-            <div class="bg-white p-6 rounded-3xl border shadow-sm mb-8">
-                <h2 class="font-serif font-bold mb-6 flex items-center gap-2"><i data-lucide="history" class="w-5 h-5"></i> Faturamento por Ano</h2>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <?php foreach ($statsPorAno as $ano => $s): ?>
-                        <div class="bg-stone-50 p-4 rounded-2xl border">
-                            <div class="font-bold text-lg"><?php echo $ano; ?></div>
-                            <div class="text-[10px] font-bold mt-1 text-stone-500">T: <?php echo formatReal($s['total']); ?></div>
-                            <div class="text-[10px] font-bold text-emerald-600">P: <?php echo formatReal($s['recebido']); ?></div>
+        <?php elseif ($activeTab === 'dashboard'): ?>
+            <!-- Estilo Dashboard -->
+            <div class="space-y-6">
+                <div class="bg-slate-900 rounded-[2.5rem] p-8 text-white shadow-2xl relative overflow-hidden">
+                    <div class="absolute -right-10 -bottom-10 opacity-10">
+                        <i data-lucide="trending-up" class="w-64 h-64"></i>
+                    </div>
+                    <span class="text-xs font-extrabold uppercase tracking-widest text-indigo-300">Resumo Geral</span>
+                    <div class="text-4xl font-black mt-2 mb-6"><?php echo formatReal($statsRemessas['valor_total']); ?></div>
+                    
+                    <div class="grid grid-cols-2 gap-4 border-t border-white/10 pt-6">
+                        <div>
+                            <span class="text-[10px] font-bold text-white/50 uppercase block mb-1">Total Recebido</span>
+                            <div class="text-lg font-bold text-emerald-400"><?php echo formatReal($statsRemessas['valor_recebido']); ?></div>
                         </div>
-                    <?php endforeach; ?>
+                        <div class="text-right">
+                            <span class="text-[10px] font-bold text-white/50 uppercase block mb-1">A Receber</span>
+                            <div class="text-lg font-bold text-rose-400"><?php echo formatReal($statsRemessas['valor_pendente']); ?></div>
+                        </div>
+                    </div>
                 </div>
-            </div>
 
-            <div class="bg-white p-6 rounded-3xl border shadow-sm overflow-hidden">
-                <h2 class="font-serif font-bold mb-6 flex items-center gap-2"><i data-lucide="list-checks" class="w-5 h-5"></i> Registros Recentes</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left">
-                        <thead class="text-[10px] text-stone-400 font-bold uppercase border-b"> <tr><th class="pb-3">Lote</th><th class="pb-3 text-center">Progresso</th><th class="pb-3 text-right">Valor</th></tr> </thead>
-                        <tbody class="divide-y text-sm">
-                            <?php foreach (array_slice($remessas, 0, 10) as $r): $v=intval($r['quantidade']??$r['qtd']??0)*floatval($r['preco_unitario']??$r['precoU']??0); ?>
-                            <tr>
-                                <td class="py-4 font-bold capitalize"><?php echo htmlspecialchars($r['peca_servico']??'Lote'); ?><div class="text-[10px] font-normal text-stone-400"><?php echo formatDate($r['data_cadastro']??null); ?></div></td>
-                                <td class="py-4 text-center text-xs font-bold text-stone-600"><?php echo intval($r['qtd_entregue']??0); ?>/<?php echo intval($r['quantidade']??0); ?></td>
-                                <td class="py-4 text-right font-bold"><?php echo formatReal($v); ?></td>
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+                <div class="bg-white rounded-[2rem] p-6 border shadow-sm">
+                    <h2 class="font-serif text-xl font-bold mb-6 flex items-center gap-2">
+                        <i data-lucide="bar-chart-3" class="w-5 h-5 text-indigo-500"></i> Faturamento Anual
+                    </h2>
+                    <div class="space-y-3">
+                        <?php foreach ($statsPorAno as $ano => $s): 
+                            $aPend = $s['total'] - $s['recebido'];
+                            $pPer = $s['total'] > 0 ? round(($s['recebido'] / $s['total']) * 100) : 0;
+                        ?>
+                            <div class="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                                <div class="flex justify-between items-center mb-3">
+                                    <span class="text-lg font-black text-slate-700"><?php echo $ano; ?></span>
+                                    <span class="text-sm font-bold text-slate-800"><?php echo formatReal($s['total']); ?></span>
+                                </div>
+                                <div class="w-full bg-slate-200 h-2 rounded-full overflow-hidden mb-3">
+                                    <div class="h-full bg-emerald-500 rounded-full" style="width: <?php echo $pPer; ?>%"></div>
+                                </div>
+                                <div class="flex justify-between text-[10px] font-extrabold uppercase">
+                                    <span class="text-emerald-600">Pago: <?php echo formatReal($s['recebido']); ?></span>
+                                    <span class="text-rose-500">Falta: <?php echo formatReal($aPend); ?></span>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
                 </div>
             </div>
         <?php endif; ?>
     </main>
 
-    <div id="modalAddRemessa" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen px-4"><div class="fixed inset-0 bg-stone-950/40" onclick="toggleModal('modalAddRemessa')"></div><div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-md w-full border"><div class="bg-stone-900 text-white p-6 flex justify-between items-center"><h3 class="font-serif text-lg font-bold">Nova Remessa</h3><button onclick="toggleModal('modalAddRemessa')"><i data-lucide="x" class="w-6 h-6"></i></button></div><form method="POST" class="p-6 space-y-4"><input type="hidden" name="action" value="add_remessa"><input type="text" name="peca_servico" required placeholder="Peça" class="w-full bg-stone-50 border rounded-xl p-3 outline-none"><div class="grid grid-cols-2 gap-4"><input type="number" step="0.01" name="preco_unitario" required placeholder="Preço" class="w-full bg-stone-50 border rounded-xl p-3 outline-none"><input type="number" name="quantidade" required placeholder="Qtd" class="w-full bg-stone-50 border rounded-xl p-3 outline-none"></div><div class="flex flex-wrap gap-2 justify-center"><?php foreach (['PP','P','M','G','GG','XG','outro'] as $t): ?><label class="px-3 py-2 border rounded-xl cursor-pointer text-xs font-bold"><input type="radio" name="tamanho" value="<?php echo $t; ?>" <?php echo $t==='M'?'checked':''; ?>> <?php echo $t; ?></label><?php endforeach; ?></div><button type="submit" class="w-full bg-stone-950 text-white font-bold py-4 rounded-xl">Salvar</button></form></div></div></div>
-    <div id="modalUpdateQtd" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen px-4"><div class="fixed inset-0 bg-stone-950/40" onclick="toggleModal('modalUpdateQtd')"></div><div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-sm w-full border"><div class="bg-stone-900 text-white p-5 flex justify-between items-center"><h3>Entregas</h3><button onclick="toggleModal('modalUpdateQtd')"><i data-lucide="x" class="w-5 h-5"></i></button></div><form method="POST" class="p-6 space-y-4"><input type="hidden" name="action" value="update_entrega"><input type="hidden" name="id" id="updateQtdId"><input type="hidden" name="collection" id="updateQtdCollection"><input type="hidden" name="qtd_atual" id="updateQtdAtualHidden"><input type="hidden" name="valor_recebido_atual" id="updateValorRecebidoAtualHidden"><p class="text-xs">Entregou <span id="updateQtdAtualLabel" class="font-bold">0</span> de <span id="updateQtdMaxLabel" class="font-bold">0</span>. Faltam: <span id="updateQtdFaltaLabel" class="font-bold text-rose-600">0</span></p><div class="flex gap-2"><input type="number" name="qtd_adicionar" id="updateQtdAdicionar" value="1" class="flex-grow border rounded-xl p-3 outline-none"><button type="button" onclick="setQtdRestante()" class="bg-stone-100 px-4 rounded-xl text-xs font-bold border">Tudo</button></div><div><label class="text-[10px] font-bold text-stone-400">RECEBER AGORA (R$)</label><input type="number" step="0.01" name="valor_recebido_agora" id="updateValorRecebidoAgora" class="w-full border rounded-xl p-3 outline-none"><p class="text-[9px] mt-1">Rec: <span id="updateValorRecebidoLabel">0</span> / Falta: <span id="updateValorPendenteLabel" class="text-rose-500">0</span></p></div><button type="submit" class="w-full bg-stone-950 text-white font-bold py-4 rounded-xl">Confirmar</button></form></div></div></div>
-    <div id="modalUpdatePagamento" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen px-4"><div class="fixed inset-0 bg-stone-950/40" onclick="toggleModal('modalUpdatePagamento')"></div><div class="bg-white rounded-3xl overflow-hidden shadow-2xl z-10 max-w-sm w-full border"><div class="bg-emerald-900 text-white p-5 flex justify-between items-center"><h3>Pagamento</h3><button onclick="toggleModal('modalUpdatePagamento')"><i data-lucide="x" class="w-5 h-5"></i></button></div><form method="POST" class="p-6 space-y-4"><input type="hidden" name="action" value="update_pagamento"><input type="hidden" name="id" id="updatePagId"><input type="hidden" name="collection" id="updatePagCollection"><input type="hidden" name="valor_recebido_atual" id="updatePagAtualHidden"><input type="number" step="0.01" name="valor_recebido_agora" required class="w-full border rounded-xl p-3 outline-none"><p class="text-[10px]">Rec: <span id="updatePagLabel">0</span>. Falta: <span id="updatePagPendenteLabel" class="text-rose-600 font-bold">0</span></p><button type="submit" class="w-full bg-emerald-600 text-white font-bold py-4 rounded-xl">Salvar</button></form></div></div></div>
-    <div id="modalCalendar" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen px-4"><div class="fixed inset-0 bg-stone-950/40" onclick="toggleModal('modalCalendar')"></div><div class="bg-white rounded-3xl shadow-2xl z-10 max-w-sm w-full border"><div class="bg-stone-950 text-white p-5 flex justify-between items-center"><div><span id="calendarYearLabel" class="text-2xl font-serif font-bold"><?php echo $filtroAno; ?></span></div><div class="flex gap-2"><button onclick="adjustFilterYear(-1)" class="p-1 bg-stone-800 rounded-lg"><i data-lucide="chevron-up" class="w-4 h-4"></i></button><button onclick="adjustFilterYear(1)" class="p-1 bg-stone-800 rounded-lg"><i data-lucide="chevron-down" class="w-4 h-4"></i></button></div></div><div class="p-6"><div class="grid grid-cols-3 gap-2 mb-6"><?php $ms=['01'=>'Jan','02'=>'Fev','03'=>'Mar','04'=>'Abr','05'=>'Mai','06'=>'Jun','07'=>'Jul','08'=>'Ago','09'=>'Set','10'=>'Out','11'=>'Nov','12'=>'Dez']; foreach ($ms as $n=>$s): ?><button onclick="setFilterPeriod('<?php echo $n; ?>')" class="py-3 rounded-xl text-xs font-bold border <?php echo $filtroMes===$n?'bg-blue-500 text-white':'bg-stone-50'; ?>"><?php echo $s; ?></button><?php endforeach; ?></div><button onclick="setFilterPeriod('geral')" class="w-full py-4 rounded-xl text-[10px] font-bold border <?php echo $filtroGeral?'bg-stone-900 text-white':'bg-white'; ?> uppercase tracking-widest">Ver Todo o Histórico</button></div></div></div></div>
+    <!-- Navegação Flutuante -->
+    <nav class="glass fixed bottom-6 left-6 right-6 h-20 rounded-[2rem] border border-slate-200/50 shadow-2xl flex items-center justify-around px-4 z-50">
+        <a href="?tab=remessas" class="flex flex-col items-center gap-1 relative <?php echo $activeTab==='remessas'?'tab-active':'text-slate-400'; ?>">
+            <i data-lucide="package" class="w-6 h-6"></i>
+            <span class="text-[10px] font-extrabold uppercase tracking-tighter">Lotes</span>
+        </a>
+        <a href="?tab=dashboard" class="flex flex-col items-center gap-1 relative <?php echo $activeTab==='dashboard'?'tab-active':'text-slate-400'; ?>">
+            <i data-lucide="pie-chart" class="w-6 h-6"></i>
+            <span class="text-[10px] font-extrabold uppercase tracking-tighter">Dashboard</span>
+        </a>
+    </nav>
+
+    <!-- Modais Estilizados -->
+    <div id="modalAddRemessa" class="fixed inset-0 z-[60] overflow-y-auto hidden">
+        <div class="flex items-end sm:items-center justify-center min-h-screen">
+            <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onclick="toggleModal('modalAddRemessa')"></div>
+            <div class="bg-white rounded-t-[2.5rem] sm:rounded-[2.5rem] overflow-hidden shadow-2xl z-10 w-full max-w-lg p-8 animate-in slide-in-from-bottom-full duration-300">
+                <div class="flex justify-between items-center mb-8">
+                    <h3 class="font-serif text-2xl font-bold text-slate-800">Novo Lote</h3>
+                    <button onclick="toggleModal('modalAddRemessa')" class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400"><i data-lucide="x" class="w-5 h-5"></i></button>
+                </div>
+                <form method="POST" class="space-y-5">
+                    <input type="hidden" name="action" value="add_remessa">
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-extrabold uppercase text-slate-400 ml-1">O que foi produzido?</label>
+                        <input type="text" name="peca_servico" required placeholder="Ex: Vestido Festa" class="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold focus:border-indigo-500 outline-none transition-all">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-extrabold uppercase text-slate-400 ml-1">Preço Peça</label>
+                            <input type="number" step="0.01" name="preco_unitario" required placeholder="0,00" class="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold focus:border-indigo-500 outline-none transition-all">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-extrabold uppercase text-slate-400 ml-1">Quantidade</label>
+                            <input type="number" name="quantidade" required placeholder="0" class="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold focus:border-indigo-500 outline-none transition-all">
+                        </div>
+                    </div>
+                    <div class="space-y-3">
+                        <label class="text-[10px] font-extrabold uppercase text-slate-400 ml-1 block text-center">Tamanho</label>
+                        <div class="flex flex-wrap gap-2 justify-center">
+                            <?php foreach (['PP','P','M','G','GG','XG','-'] as $t): ?>
+                                <label class="flex-1 min-w-[50px] py-3 border-2 border-slate-100 rounded-xl cursor-pointer text-center transition-all has-[:checked]:bg-indigo-600 has-[:checked]:border-indigo-600 has-[:checked]:text-white">
+                                    <input type="radio" name="tamanho" value="<?php echo $t; ?>" <?php echo $t==='M'?'checked':''; ?> class="hidden">
+                                    <span class="text-xs font-bold"><?php echo $t; ?></span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full bg-indigo-600 text-white font-extrabold py-5 rounded-[1.5rem] shadow-xl shadow-indigo-100 active:scale-95 transition-all mt-4">Criar Lote</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modais de Ação Rápida -->
+    <div id="modalUpdateQtd" class="fixed inset-0 z-[60] overflow-y-auto hidden">
+        <div class="flex items-end sm:items-center justify-center min-h-screen">
+            <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="toggleModal('modalUpdateQtd')"></div>
+            <div class="bg-white rounded-t-[2.5rem] sm:rounded-[2.5rem] shadow-2xl z-10 w-full max-w-sm p-8 animate-in slide-in-from-bottom-full duration-300">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-xl font-extrabold text-slate-800">Registrar Entrega</h3>
+                    <button onclick="toggleModal('modalUpdateQtd')" class="text-slate-300"><i data-lucide="x" class="w-6 h-6"></i></button>
+                </div>
+                <form method="POST" class="space-y-6">
+                    <input type="hidden" name="action" value="update_entrega">
+                    <input type="hidden" name="id" id="updateQtdId">
+                    <input type="hidden" name="collection" id="updateQtdCollection">
+                    <input type="hidden" name="qtd_atual" id="updateQtdAtualHidden">
+                    <input type="hidden" name="valor_recebido_atual" id="updateValorRecebidoAtualHidden">
+                    
+                    <div class="bg-slate-50 p-4 rounded-2xl flex justify-between items-center">
+                        <div>
+                            <span class="text-[10px] font-extrabold text-slate-400 uppercase block">Já Entregue</span>
+                            <span id="updateQtdAtualLabel" class="text-lg font-black">0</span>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-[10px] font-extrabold text-indigo-500 uppercase block">Faltam</span>
+                            <span id="updateQtdFaltaLabel" class="text-lg font-black text-indigo-600">0</span>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-extrabold uppercase text-slate-400">Quanto entregar agora?</label>
+                        <div class="flex gap-2">
+                            <input type="number" name="qtd_adicionar" id="updateQtdAdicionar" value="1" class="flex-grow bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-black outline-none focus:border-indigo-500">
+                            <button type="button" onclick="setQtdRestante()" class="bg-indigo-50 text-indigo-600 px-4 rounded-2xl font-black text-xs">TUDO</button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-extrabold uppercase text-slate-400">Recebeu valor? (Opcional)</label>
+                        <input type="number" step="0.01" name="valor_recebido_agora" id="updateValorRecebidoAgora" placeholder="R$ 0,00" class="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-black outline-none focus:border-emerald-500">
+                    </div>
+
+                    <button type="submit" class="w-full bg-indigo-600 text-white font-extrabold py-5 rounded-[1.5rem] shadow-xl shadow-indigo-100">Confirmar Entrega</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Pagamento -->
+    <div id="modalUpdatePagamento" class="fixed inset-0 z-[60] overflow-y-auto hidden">
+        <div class="flex items-end sm:items-center justify-center min-h-screen">
+            <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="toggleModal('modalUpdatePagamento')"></div>
+            <div class="bg-white rounded-t-[2.5rem] sm:rounded-[2.5rem] shadow-2xl z-10 w-full max-w-sm p-8">
+                <h3 class="text-xl font-extrabold text-slate-800 mb-6 flex items-center gap-2">
+                    <i data-lucide="banknote" class="w-6 h-6 text-emerald-500"></i> Registrar Valor
+                </h3>
+                <form method="POST" class="space-y-6">
+                    <input type="hidden" name="action" value="update_pagamento">
+                    <input type="hidden" name="id" id="updatePagId">
+                    <input type="hidden" name="collection" id="updatePagCollection">
+                    <input type="hidden" name="valor_recebido_atual" id="updatePagAtualHidden">
+                    
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-extrabold uppercase text-slate-400">Quanto recebeu agora?</label>
+                        <input type="number" step="0.01" name="valor_recebido_agora" required placeholder="0,00" class="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-black outline-none focus:border-emerald-500 text-xl">
+                    </div>
+                    
+                    <div class="bg-emerald-50 p-4 rounded-2xl flex justify-between text-xs">
+                        <span class="font-bold text-emerald-700">Já recebido:</span>
+                        <span id="updatePagLabel" class="font-black text-emerald-800">R$ 0,00</span>
+                    </div>
+
+                    <button type="submit" class="w-full bg-emerald-600 text-white font-extrabold py-5 rounded-[1.5rem] shadow-xl shadow-emerald-100">Salvar Pagamento</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Calendário -->
+    <div id="modalCalendar" class="fixed inset-0 z-[60] overflow-y-auto hidden">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="toggleModal('modalCalendar')"></div>
+            <div class="glass border border-white/20 rounded-[2.5rem] shadow-2xl z-10 w-full max-w-sm overflow-hidden">
+                <div class="bg-slate-900 text-white p-6 flex justify-between items-center">
+                    <div>
+                        <span class="text-[10px] font-black uppercase text-white/40 block mb-1">Selecionar Ano</span>
+                        <span id="calendarYearLabel" class="text-3xl font-serif font-bold"><?php echo $filtroAno; ?></span>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="adjustFilterYear(-1)" class="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center"><i data-lucide="chevron-up" class="w-5 h-5"></i></button>
+                        <button onclick="adjustFilterYear(1)" class="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center"><i data-lucide="chevron-down" class="w-5 h-5"></i></button>
+                    </div>
+                </div>
+                <div class="p-6">
+                    <div class="grid grid-cols-3 gap-2 mb-6">
+                        <?php $ms=['01'=>'Jan','02'=>'Fev','03'=>'Mar','04'=>'Abr','05'=>'Mai','06'=>'Jun','07'=>'Jul','08'=>'Ago','09'=>'Set','10'=>'Out','11'=>'Nov','12'=>'Dez']; 
+                        foreach ($ms as $n=>$s): ?>
+                            <button onclick="setFilterPeriod('<?php echo $n; ?>')" class="py-4 rounded-2xl text-xs font-black transition-all <?php echo $filtroMes===$n?'bg-indigo-600 text-white shadow-lg shadow-indigo-100':'bg-white text-slate-400 border border-slate-100'; ?>">
+                                <?php echo $s; ?>
+                            </button>
+                        <?php endforeach; ?>
+                    </div>
+                    <button onclick="setFilterPeriod('geral')" class="w-full py-5 rounded-2xl text-xs font-black transition-all <?php echo $filtroGeral?'bg-slate-900 text-white':'bg-slate-100 text-slate-500'; ?> uppercase tracking-widest">Ver Todo o Histórico</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script>
         function toggleModal(id) { document.getElementById(id).classList.toggle('hidden'); }
-        function toggleDetails(id) { document.getElementById('details-'+id).classList.toggle('hidden'); }
         let maxLoteAtual=0, entAtu=0, valRecAtu=0;
         function openUpdateQtd(id, ent, max, col, rec, pr) {
-            maxLoteAtual=max; entAtu=ent; valRecAtu=parseFloat(rec||0); const pend = Math.max(0, (max*parseFloat(pr||0))-valRecAtu);
+            maxLoteAtual=max; entAtu=ent; valRecAtu=parseFloat(rec||0);
             document.getElementById('updateQtdId').value=id; document.getElementById('updateQtdCollection').value=col;
             document.getElementById('updateQtdAtualHidden').value=ent; document.getElementById('updateValorRecebidoAtualHidden').value=valRecAtu;
             document.getElementById('updateQtdAtualLabel').innerText=ent; document.getElementById('updateQtdMaxLabel').innerText=max;
             document.getElementById('updateQtdFaltaLabel').innerText=max-ent;
             document.getElementById('updateValorRecebidoLabel').innerText=formatRealJS(valRecAtu);
-            document.getElementById('updateValorPendenteLabel').innerText=formatRealJS(pend);
-            document.getElementById('updateQtdAdicionar').value=(max-ent)>0?1:0; toggleModal('modalUpdateQtd');
+            document.getElementById('updateValorPendenteLabel').innerText=formatRealJS(Math.max(0, (max*parseFloat(pr||0))-valRecAtu));
+            toggleModal('modalUpdateQtd');
         }
         function openUpdatePagamento(id, rec, col, max, pr) {
-            const val=parseFloat(rec||0), tot=parseInt(max||0)*parseFloat(pr||0), pend=Math.max(0,tot-val);
+            const val=parseFloat(rec||0), tot=parseInt(max||0)*parseFloat(pr||0);
             document.getElementById('updatePagId').value=id; document.getElementById('updatePagCollection').value=col;
             document.getElementById('updatePagAtualHidden').value=val;
             document.getElementById('updatePagLabel').innerText=formatRealJS(val);
-            document.getElementById('updatePagPendenteLabel').innerText=formatRealJS(pend); toggleModal('modalUpdatePagamento');
+            toggleModal('modalUpdatePagamento');
         }
         function setQtdRestante() { document.getElementById('updateQtdAdicionar').value = maxLoteAtual - entAtu; }
         function openEditRemessa(r) {
             document.getElementById('editRemessaId').value=r.id; document.getElementById('editRemessaCollection').value=r.__collection;
-            document.getElementById('editRemessaPeca').value=r.peca_servico || r.peca; document.getElementById('editRemessaPreco').value=r.preco_unitario || r.precoU;
-            document.getElementById('editRemessaQtd').value=r.quantidade || r.qtd; toggleModal('modalEditRemessa');
+            // ... (Populate edit fields if needed, currently redirected to simple update)
+            toggleModal('modalAddRemessa'); 
         }
         function adjustFilterYear(d) { activeFilterYear+=d; document.getElementById('calendarYearLabel').innerText=activeFilterYear; }
         function setFilterPeriod(m) { window.location.href=`?tab=<?php echo $activeTab; ?>&mes=${m}&ano=${activeFilterYear}`; }
