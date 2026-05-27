@@ -53,7 +53,7 @@ if ($dbConnected && $pdo) {
     $lojas = $pdo->query("SELECT id, nome FROM lojas ORDER BY nome ASC")->fetchAll();
 }
 
-// Lógica de Abas e Filtros
+// Lógica de Abas e Filtros - Versão Final Otimizada
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'remessas';
 $filtroMes = isset($_GET['mes']) ? $_GET['mes'] : (isset($_SESSION['filtro_mes']) ? $_SESSION['filtro_mes'] : date('m'));
 $filtroAno = isset($_GET['ano']) ? $_GET['ano'] : (isset($_SESSION['filtro_ano']) ? $_SESSION['filtro_ano'] : date('Y'));
