@@ -424,3 +424,264 @@ function firestore_update_remessa_entrega(string $docId, int $qtd, ?string $data
 function firestore_upsert_user(array $userData): bool { return true; }
 function firestore_sync_user_to_local(PDO $pdo, array $userData): ?array { return null; }
 try { $credentials = firestore_get_credentials(); } catch (Throwable $e) { $credentials = null; }
+
+// =============================================================================
+// SINCRONISMO LOCAL (MySQL) — Failover + Fila de Escrita
+// =============================================================================
+
+/**
+ * Verifica se um erro do Firestore é causado por cota esgotada.
+ * Cobre HTTP 429 (Too Many Requests) e 403 com mensagem de quota.
+ */
+function firestore_is_quota_error(string $message): bool
+{
+    return stripos($message, 'quota') !== false
+        || stripos($message, 'RESOURCE_EXHAUSTED') !== false
+        || stripos($message, '429') !== false
+        || stripos($message, 'rateLimitExceeded') !== false;
+}
+
+/**
+ * Espelha um array de lotes no MySQL local usando INSERT ... ON DUPLICATE KEY UPDATE.
+ * Nunca sobrescreve registros com sincronizado=0 (alterações locais pendentes)
+ * a menos que o atualizado_em do Firestore seja mais recente.
+ */
+function lotes_espelhar_no_mysql(PDO $pdo, array $lotes, string $mesAnoRef): void
+{
+    $sql = <<<SQL
+        INSERT INTO lotes (
+            id, mes_ano_referencia, usuario_uid, usuario_email,
+            peca_servico, quantidade, qtd_entregue, preco_unitario,
+            tamanho, valor_recebido, data_cadastro, data_entrega,
+            sincronizado, atualizado_em
+        ) VALUES (
+            :id, :mes_ano, :uid, :email,
+            :peca, :qtd, :qtd_e, :preco,
+            :tamanho, :val_rec, :data_cad, :data_ent,
+            1, :atualizado_em
+        )
+        ON DUPLICATE KEY UPDATE
+            -- Só atualiza se o dado do Firestore for mais recente que o local
+            peca_servico    = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), peca_servico,    VALUES(peca_servico)),
+            quantidade      = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), quantidade,      VALUES(quantidade)),
+            qtd_entregue    = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), qtd_entregue,    VALUES(qtd_entregue)),
+            preco_unitario  = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), preco_unitario,  VALUES(preco_unitario)),
+            tamanho         = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), tamanho,         VALUES(tamanho)),
+            valor_recebido  = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), valor_recebido,  VALUES(valor_recebido)),
+            data_entrega    = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), data_entrega,    VALUES(data_entrega)),
+            sincronizado    = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), 0,               1),
+            atualizado_em   = IF(sincronizado = 0 AND atualizado_em > VALUES(atualizado_em), atualizado_em,   VALUES(atualizado_em))
+    SQL;
+
+    $stmt = $pdo->prepare($sql);
+
+    foreach ($lotes as $r) {
+        // Normaliza o timestamp: usa atualizado_em do Firestore se existir,
+        // senão usa data_cadastro como fallback para não inserir NULL.
+        $tsFirestore = $r['atualizado_em'] ?? $r['data_cadastro'] ?? date('Y-m-d H:i:s');
+        if (strlen($tsFirestore) > 19) {
+            // Converte ISO 8601 com fuso (ex: 2025-01-15T10:30:00Z) para datetime MySQL
+            try {
+                $dt = new DateTime($tsFirestore);
+                $dt->setTimezone(new DateTimeZone('UTC'));
+                $tsFirestore = $dt->format('Y-m-d H:i:s.v');
+            } catch (Throwable) {
+                $tsFirestore = substr($tsFirestore, 0, 19);
+            }
+        }
+
+        $stmt->execute([
+            ':id'           => $r['id'],
+            ':mes_ano'      => $mesAnoRef,
+            ':uid'          => $r['usuario_uid'] ?? $r['usuario_id'] ?? '',
+            ':email'        => $r['usuario_email'] ?? '',
+            ':peca'         => $r['peca_servico'] ?? '',
+            ':qtd'          => intval($r['quantidade'] ?? $r['qtd'] ?? 0),
+            ':qtd_e'        => intval($r['qtd_entregue'] ?? $r['entregue'] ?? 0),
+            ':preco'        => floatval($r['preco_unitario'] ?? $r['precoU'] ?? 0),
+            ':tamanho'      => $r['tamanho'] ?? '-',
+            ':val_rec'      => floatval($r['valor_recebido'] ?? 0),
+            ':data_cad'     => $r['data_cadastro'] ?? null,
+            ':data_ent'     => $r['data_entrega'] ?? $r['data_ultima_entrega'] ?? null,
+            ':atualizado_em'=> $tsFirestore,
+        ]);
+    }
+}
+
+/**
+ * Busca lotes de uma coleção mensal com failover automático para MySQL.
+ *
+ * Retorna um array com:
+ *   'lotes'      => array de lotes normalizados
+ *   'fonte'      => 'firestore' | 'mysql'
+ *   'contingencia' => bool (true quando usando espelho local)
+ */
+function lotes_buscar(string $colecao, PDO $pdo = null): array
+{
+    // --- Tentativa 1: Firestore ---
+    try {
+        $resp  = firestore_request('GET', 'documents/' . rawurlencode($colecao) . '?pageSize=1000');
+        $lotes = [];
+
+        foreach (($resp['documents'] ?? []) as $d) {
+            $doc           = firestore_document_to_array($d);
+            $parts         = explode('/', $d['name']);
+            $doc['id']     = end($parts);
+            $doc['__collection'] = $colecao;
+
+            // Normaliza data_cadastro para exibição
+            if (empty($doc['data_cadastro'])) {
+                $cand = $doc['data'] ?? $doc['data_entrada'] ?? null;
+                if ($cand) $doc['data_cadastro'] = substr($cand, 0, 10);
+            }
+            $lotes[] = $doc;
+        }
+
+        // Espelha no MySQL em background (não bloqueia a resposta)
+        if ($pdo && !empty($lotes)) {
+            try {
+                lotes_espelhar_no_mysql($pdo, $lotes, $colecao);
+            } catch (Throwable) {
+                // Falha no espelhamento não deve derrubar a leitura
+            }
+        }
+
+        usort($lotes, fn($a, $b) => strcmp($b['data_cadastro'] ?? '', $a['data_cadastro'] ?? ''));
+        return ['lotes' => $lotes, 'fonte' => 'firestore', 'contingencia' => false];
+
+    } catch (Throwable $e) {
+        // --- Failover: só ativa para erros de cota; outros erros são relancados ---
+        if (!firestore_is_quota_error($e->getMessage())) {
+            throw $e;
+        }
+    }
+
+    // --- Tentativa 2: MySQL local (modo de contingência) ---
+    if (!$pdo) {
+        // Sem banco local disponível, não há fallback possível
+        return ['lotes' => [], 'fonte' => 'mysql', 'contingencia' => true];
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT * FROM lotes WHERE mes_ano_referencia = :col ORDER BY data_cadastro DESC'
+    );
+    $stmt->execute([':col' => $colecao]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Normaliza para o mesmo formato usado pelo restante da aplicação
+    $lotes = array_map(function (array $row) use ($colecao): array {
+        return [
+            'id'             => $row['id'],
+            '__collection'   => $colecao,
+            'peca_servico'   => $row['peca_servico'],
+            'quantidade'     => intval($row['quantidade']),
+            'qtd_entregue'   => intval($row['qtd_entregue']),
+            'preco_unitario' => floatval($row['preco_unitario']),
+            'tamanho'        => $row['tamanho'],
+            'valor_recebido' => floatval($row['valor_recebido']),
+            'data_cadastro'  => $row['data_cadastro'],
+            'data_entrega'   => $row['data_entrega'],
+            'usuario_uid'    => $row['usuario_uid'],
+            'usuario_email'  => $row['usuario_email'],
+            // Indica origem local para a UI poder exibir badge de contingência
+            '__local'        => true,
+        ];
+    }, $rows);
+
+    return ['lotes' => $lotes, 'fonte' => 'mysql', 'contingencia' => true];
+}
+
+/**
+ * Grava um lote no Firestore (PATCH com máscara) e espelha no MySQL.
+ *
+ * Se o Firestore falhar por cota, salva localmente com sincronizado=0
+ * e retorna ['sucesso' => true, 'contingencia' => true] para que a UI
+ * exiba a mensagem de "salvo localmente".
+ *
+ * Nunca usa PUT — sempre PATCH com updateMask para preservar campos do Flutter.
+ */
+function lotes_salvar(
+    string $docId,
+    array  $dados,
+    string $colecao,
+    PDO    $pdo = null,
+    bool   $isNovo = false
+): array {
+    $agora     = (new DateTime('now', new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s.v\Z');
+    $agoraMysql = (new DateTime('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.v');
+
+    // Inclui atualizado_em no payload para o Firestore registrar o timestamp
+    $dados['atualizado_em'] = ['__timestamp' => $agora];
+
+    $contingencia = false;
+
+    // --- Tentativa: enviar para o Firestore via PATCH ---
+    try {
+        if ($isNovo) {
+            // Novo documento: POST cria com ID definido
+            firestore_request(
+                'POST',
+                'documents/' . rawurlencode($colecao) . '?documentId=' . $docId,
+                ['fields' => firestore_build_fields($dados)]
+            );
+        } else {
+            // Atualização: PATCH com máscara de campos (nunca apaga campos do Flutter)
+            firestore_update_remessa($docId, $dados, $colecao);
+        }
+    } catch (Throwable $e) {
+        if (!firestore_is_quota_error($e->getMessage())) {
+            throw $e; // Erro real — relanca para o chamador tratar
+        }
+        $contingencia = true; // Cota esgotada — enfileira localmente
+    }
+
+    // --- Espelha no MySQL (sincronizado=1 se foi ao Firebase, 0 se ficou na fila) ---
+    if ($pdo) {
+        try {
+            $sql = <<<SQL
+                INSERT INTO lotes (
+                    id, mes_ano_referencia, usuario_uid, usuario_email,
+                    peca_servico, quantidade, qtd_entregue, preco_unitario,
+                    tamanho, valor_recebido, data_cadastro, data_entrega,
+                    sincronizado, atualizado_em
+                ) VALUES (
+                    :id, :mes_ano, :uid, :email,
+                    :peca, :qtd, :qtd_e, :preco,
+                    :tamanho, :val_rec, :data_cad, :data_ent,
+                    :sync, :atualizado_em
+                )
+                ON DUPLICATE KEY UPDATE
+                    peca_servico   = VALUES(peca_servico),
+                    quantidade     = VALUES(quantidade),
+                    qtd_entregue   = VALUES(qtd_entregue),
+                    preco_unitario = VALUES(preco_unitario),
+                    tamanho        = VALUES(tamanho),
+                    valor_recebido = VALUES(valor_recebido),
+                    data_entrega   = VALUES(data_entrega),
+                    sincronizado   = VALUES(sincronizado),
+                    atualizado_em  = VALUES(atualizado_em)
+            SQL;
+
+            $pdo->prepare($sql)->execute([
+                ':id'           => $docId,
+                ':mes_ano'      => $colecao,
+                ':uid'          => $dados['usuario_uid'] ?? $dados['usuario_id'] ?? '',
+                ':email'        => $dados['usuario_email'] ?? '',
+                ':peca'         => $dados['peca_servico'] ?? '',
+                ':qtd'          => intval($dados['quantidade'] ?? 0),
+                ':qtd_e'        => intval($dados['qtd_entregue'] ?? $dados['entregue'] ?? 0),
+                ':preco'        => floatval($dados['preco_unitario'] ?? $dados['precoU'] ?? 0),
+                ':tamanho'      => $dados['tamanho'] ?? '-',
+                ':val_rec'      => floatval($dados['valor_recebido'] ?? 0),
+                ':data_cad'     => $dados['data_cadastro'] ?? null,
+                ':data_ent'     => $dados['data_entrega'] ?? $dados['data_ultima_entrega'] ?? null,
+                ':sync'         => $contingencia ? 0 : 1,
+                ':atualizado_em'=> $agoraMysql,
+            ]);
+        } catch (Throwable) {
+            // Falha no MySQL não deve impedir o retorno ao usuário
+        }
+    }
+
+    return ['sucesso' => true, 'contingencia' => $contingencia];
+}

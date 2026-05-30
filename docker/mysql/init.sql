@@ -79,6 +79,40 @@ CREATE TABLE IF NOT EXISTS `remessas` (
     CONSTRAINT `fk_remessas_loja` FOREIGN KEY (`loja_id`) REFERENCES `lojas` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 7. Tabela de Lotes — espelho do Firestore com controle de sincronismo
+-- O campo `id` usa o próprio ID do documento Firestore como chave primária,
+-- garantindo que INSERT ... ON DUPLICATE KEY UPDATE nunca crie duplicatas.
+CREATE TABLE IF NOT EXISTS `lotes` (
+    -- Identificação (espelha o Firestore)
+    `id`                  VARCHAR(50)     NOT NULL COMMENT 'ID do documento no Firestore',
+    `mes_ano_referencia`  VARCHAR(50)     NOT NULL COMMENT 'Coleção mensal de origem: {mes}-{ano}{uid}',
+    `usuario_uid`         VARCHAR(128)    NOT NULL COMMENT 'UID do usuário no Firebase Auth',
+    `usuario_email`       VARCHAR(255)    NOT NULL,
+
+    -- Dados do lote (compatíveis com os campos do app Flutter)
+    `peca_servico`        VARCHAR(255)    NOT NULL,
+    `quantidade`          INT             NOT NULL DEFAULT 0,
+    `qtd_entregue`        INT             NOT NULL DEFAULT 0,
+    `preco_unitario`      DECIMAL(10,2)   NOT NULL DEFAULT 0.00,
+    `tamanho`             VARCHAR(10)     NOT NULL DEFAULT '-',
+    `valor_recebido`      DECIMAL(10,2)   NOT NULL DEFAULT 0.00,
+    `data_cadastro`       VARCHAR(30)     DEFAULT NULL COMMENT 'ISO 8601 vindo do Firestore',
+    `data_entrega`        VARCHAR(30)     DEFAULT NULL COMMENT 'ISO 8601 da última entrega',
+
+    -- Controle de sincronismo
+    `sincronizado`        TINYINT(1)      NOT NULL DEFAULT 1
+                          COMMENT '1 = idêntico ao Firestore | 0 = pendente de envio',
+    `atualizado_em`       DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                          ON UPDATE CURRENT_TIMESTAMP(3)
+                          COMMENT 'Timestamp da última alteração local (ms de precisão)',
+
+    PRIMARY KEY (`id`),
+    INDEX `idx_lotes_usuario`   (`usuario_uid`),
+    INDEX `idx_lotes_mes_ano`   (`mes_ano_referencia`),
+    INDEX `idx_lotes_sync`      (`sincronizado`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='Espelho local dos lotes do Firestore com fila de sincronização';
+
 
 -- ==========================================
 -- INSERÇÃO DE DADOS DE TESTE (MOCK DATA)
