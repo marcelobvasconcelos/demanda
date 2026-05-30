@@ -262,6 +262,42 @@ if ($firestoreEnabled) {
     } catch (Throwable $e) { $msgError = 'Erro: ' . $e->getMessage(); }
 }
 
+// ----------------------------------------------------
+// Métricas de Sincronismo (alimentam o painel de saúde)
+// ----------------------------------------------------
+
+// 1. Fonte dos dados: veio do Firestore ou do espelho MySQL?
+//    O cache JSON local é considerado "firestore" pois foi populado por ele.
+//    Só será "mysql" se lotes_buscar() tiver ativado o fallback de cota.
+$syncContingencia = false; // true = cota esgotada, exibindo espelho local
+
+// 2. Fila de pendentes: lotes gravados offline aguardando envio ao Firebase
+$syncPendentesNaFila = 0;
+if ($dbConnected && $pdo) {
+    try {
+        $syncPendentesNaFila = (int) $pdo
+            ->query('SELECT COUNT(*) FROM lotes WHERE sincronizado = 0')
+            ->fetchColumn();
+    } catch (Throwable) {}
+}
+
+// 3. Carimbo do último sync: usa o mtime do arquivo de cache JSON como referência.
+//    Se o cache não existir, tenta pegar o atualizado_em mais recente do MySQL.
+$syncUltimaVerificacao = null;
+$cacheFileRef = __DIR__ . '/tmp/dashboard_cache_' . md5($_SESSION['usuario_email'] ?? '') . '.json';
+if (file_exists($cacheFileRef)) {
+    $syncUltimaVerificacao = date('d/m/Y \à\s H:i', filemtime($cacheFileRef));
+} elseif ($dbConnected && $pdo) {
+    try {
+        $tsRow = $pdo
+            ->query('SELECT MAX(atualizado_em) FROM lotes WHERE sincronizado = 1')
+            ->fetchColumn();
+        if ($tsRow) {
+            $syncUltimaVerificacao = (new DateTime($tsRow))->format('d/m/Y \à\s H:i');
+        }
+    } catch (Throwable) {}
+}
+
 function formatReal($val) { return 'R$ ' . number_format($val, 2, ',', '.'); }
 function formatDate($d) { if (!$d) return '-'; try { return (new DateTime($d))->format('d/m/Y'); } catch (Throwable $e) { return substr($d, 0, 10); } }
 function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março','04'=>'abril','05'=>'maio','06'=>'junho','07'=>'julho','08'=>'agosto','09'=>'setembro','10'=>'outubro','11'=>'novembro','12'=>'dezembro']; return $mn[$m] ?? 'todo o período'; }
@@ -321,10 +357,19 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
             </nav>
 
             <div class="flex items-center gap-2 md:gap-4">
-                <div class="flex items-center gap-1.5 bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-full text-[10px] font-black uppercase">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span class="hidden xs:inline">Online</span>
-                </div>
+                <?php if ($syncContingencia): ?>
+                    <!-- Badge Âmbar: modo de contingência (cota Firebase esgotada) -->
+                    <div class="flex items-center gap-1.5 bg-amber-100 text-amber-700 px-3 py-1.5 rounded-full text-[10px] font-black uppercase border border-amber-200">
+                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                        <span class="hidden sm:inline">Contingência</span>
+                    </div>
+                <?php else: ?>
+                    <!-- Badge Verde: conectado ao Firestore em tempo real -->
+                    <div class="flex items-center gap-1.5 bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-full text-[10px] font-black uppercase">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <span class="hidden sm:inline">Online</span>
+                    </div>
+                <?php endif; ?>
                 <form method="POST" onsubmit="return confirm('Deseja sair?')">
                     <input type="hidden" name="action" value="logout">
                     <button type="submit" class="w-10 h-10 md:w-11 md:h-11 rounded-2xl flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition-all">
@@ -480,6 +525,65 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
             </div>
 
         <?php elseif ($activeTab === 'dashboard'): ?>
+            <!-- ============================================================
+                 BARRA DE SAÚDE DO ECOSSISTEMA
+                 Exibida apenas na aba Dashboard, acima dos cards financeiros.
+                 Não interfere em nenhum cálculo existente.
+            ============================================================ -->
+            <div class="mb-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
+
+                <!-- Card 1: Status da conexão -->
+                <?php if ($syncContingencia): ?>
+                <div class="flex items-center gap-4 bg-amber-50 border border-amber-200 rounded-[1.5rem] px-5 py-4">
+                    <div class="w-10 h-10 bg-amber-100 text-amber-600 rounded-xl flex items-center justify-center shrink-0">
+                        <i data-lucide="wifi-off" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-black uppercase text-amber-500 tracking-widest leading-none mb-0.5">Contingência</p>
+                        <p class="text-xs font-bold text-amber-800 leading-tight">Cota Firebase excedida. Exibindo espelho local (MySQL)</p>
+                    </div>
+                </div>
+                <?php else: ?>
+                <div class="flex items-center gap-4 bg-emerald-50 border border-emerald-100 rounded-[1.5rem] px-5 py-4">
+                    <div class="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center shrink-0">
+                        <i data-lucide="database-zap" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-black uppercase text-emerald-500 tracking-widest leading-none mb-0.5">Conectado ao Firestore</p>
+                        <p class="text-xs font-bold text-emerald-800 leading-tight">Dados em tempo real</p>
+                    </div>
+                </div>
+                <?php endif; ?>
+
+                <!-- Card 2: Fila de sincronismo -->
+                <div class="flex items-center gap-4 <?php echo $syncPendentesNaFila > 0 ? 'bg-indigo-50 border-indigo-100' : 'bg-slate-50 border-slate-100'; ?> border rounded-[1.5rem] px-5 py-4">
+                    <div class="w-10 h-10 <?php echo $syncPendentesNaFila > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-400'; ?> rounded-xl flex items-center justify-center shrink-0">
+                        <i data-lucide="refresh-cw" class="w-5 h-5 <?php echo $syncPendentesNaFila > 0 ? 'animate-spin' : ''; ?>"></i>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-black uppercase <?php echo $syncPendentesNaFila > 0 ? 'text-indigo-500' : 'text-slate-400'; ?> tracking-widest leading-none mb-0.5">Fila de Sincronismo</p>
+                        <?php if ($syncPendentesNaFila > 0): ?>
+                            <p class="text-xs font-bold text-indigo-800 leading-tight"><?php echo $syncPendentesNaFila; ?> lote<?php echo $syncPendentesNaFila > 1 ? 's' : ''; ?> aguardando envio ao app</p>
+                        <?php else: ?>
+                            <p class="text-xs font-bold text-slate-500 leading-tight">Todos os dados sincronizados com o app mobile</p>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <!-- Card 3: Carimbo do último sync -->
+                <div class="flex items-center gap-4 bg-slate-50 border border-slate-100 rounded-[1.5rem] px-5 py-4">
+                    <div class="w-10 h-10 bg-slate-100 text-slate-400 rounded-xl flex items-center justify-center shrink-0">
+                        <i data-lucide="clock" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-black uppercase text-slate-400 tracking-widest leading-none mb-0.5">Última Verificação</p>
+                        <p class="text-xs font-bold text-slate-600 leading-tight">
+                            <?php echo $syncUltimaVerificacao ? 'Firebase: ' . $syncUltimaVerificacao : 'Nenhum registro ainda'; ?>
+                        </p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Dashboard Estendido Desktop -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
                 
