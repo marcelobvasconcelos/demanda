@@ -237,6 +237,28 @@ if ($firestoreEnabled) {
         }
         $statsRemessas['valor_pendente'] = max(0, $statsRemessas['valor_total'] - $statsRemessas['valor_recebido']);
         krsort($statsPorAno);
+
+        // Pendente dos últimos 6 meses (sem novas chamadas ao Firebase, usa cache)
+        $pendente6Meses = 0.0;
+        $pendente6MesesPorMes = [];
+        $mesesNomes = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março','04'=>'abril','05'=>'maio','06'=>'junho','07'=>'julho','08'=>'agosto','09'=>'setembro','10'=>'outubro','11'=>'novembro','12'=>'dezembro'];
+        for ($i = 0; $i < 6; $i++) {
+            $dt = new DateTime('first day of -' . $i . ' month');
+            $prefix = ($mesesNomes[$dt->format('m')] ?? '') . '-' . $dt->format('Y');
+            $label = ucfirst($mesesNomes[$dt->format('m')] ?? '') . '/' . $dt->format('Y');
+            $totalMes = 0.0; $recMes = 0.0;
+            foreach ($allRemessas as $r) {
+                if (strpos($r['__collection'] ?? '', $prefix) === 0) {
+                    $qT = intval($r['quantidade'] ?? $r['qtd'] ?? 0);
+                    $prU = floatval($r['preco_unitario'] ?? $r['precoU'] ?? 0);
+                    $totalMes += floatval($r['total'] ?? ($qT * $prU));
+                    $recMes += floatval($r['valor_recebido'] ?? 0);
+                }
+            }
+            $pendMes = max(0, $totalMes - $recMes);
+            $pendente6Meses += $pendMes;
+            if ($totalMes > 0) $pendente6MesesPorMes[] = ['label' => $label, 'pendente' => $pendMes, 'total' => $totalMes];
+        }
     } catch (Throwable $e) { $msgError = 'Erro: ' . $e->getMessage(); }
 }
 
@@ -463,6 +485,30 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
                 
                 <!-- Coluna Principal (Dashboard) -->
                 <div class="lg:col-span-2 space-y-8">
+
+                    <!-- Card Pendente 6 Meses -->
+                    <div class="bg-gradient-to-br from-rose-500 to-rose-600 rounded-[3rem] p-8 text-white shadow-2xl shadow-rose-100 relative overflow-hidden">
+                        <i data-lucide="clock" class="absolute -right-8 -bottom-8 w-48 h-48 opacity-10"></i>
+                        <div class="flex items-start justify-between mb-6">
+                            <div>
+                                <span class="text-[10px] font-black uppercase tracking-[0.2em] opacity-70 block mb-1">A Receber — Últimos 6 Meses</span>
+                                <div class="text-5xl font-black tracking-tighter"><?php echo formatReal($pendente6Meses); ?></div>
+                            </div>
+                            <div class="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
+                                <i data-lucide="hand-coins" class="w-7 h-7"></i>
+                            </div>
+                        </div>
+                        <?php if (!empty($pendente6MesesPorMes)): ?>
+                        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 border-t border-white/20 pt-6">
+                            <?php foreach ($pendente6MesesPorMes as $pm): ?>
+                                <div class="bg-white/10 rounded-2xl px-4 py-3">
+                                    <span class="text-[9px] font-black uppercase opacity-60 block mb-0.5"><?php echo $pm['label']; ?></span>
+                                    <span class="text-sm font-black"><?php echo formatReal($pm['pendente']); ?></span>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                        <?php endif; ?>
+                    </div>
                     <div class="bg-slate-900 rounded-[3rem] p-10 text-white shadow-2xl relative overflow-hidden group">
                         <i data-lucide="coins" class="absolute -right-10 -bottom-10 w-72 h-72 opacity-5 group-hover:rotate-12 transition-transform duration-1000"></i>
                         <h2 class="text-indigo-400 font-black uppercase tracking-[0.2em] text-xs mb-4">Consolidado Geral</h2>
