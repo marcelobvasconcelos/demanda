@@ -73,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $firestoreEnabled) {
 
     if ($action === 'login') {
         $email = isset($_POST['email']) ? strtolower(trim($_POST['email'])) : '';
-        $senha = trim($_POST['senha'] ?? '');
+        $senha = trim($_POST['password'] ?? '');
         if ($email === '' || $senha === '') {
             $msgError = 'E-mail e senha são obrigatórios.';
         } else {
