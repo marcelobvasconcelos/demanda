@@ -887,7 +887,7 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
             maxLoteAtual=max; entAtu=ent; valRecAtu=parseFloat(rec||0);
             document.getElementById('updateQtdId').value=id; document.getElementById('updateQtdCollection').value=col;
             document.getElementById('updateQtdAtualHidden').value=ent; document.getElementById('updateValorRecebidoAtualHidden').value=valRecAtu;
-            document.getElementById('updateQtdAtualLabel').innerText=ent; document.getElementById('updateQtdMaxLabel').innerText=max;
+            document.getElementById('updateQtdAtualLabel').innerText=ent;
             document.getElementById('updateQtdFaltaLabel').innerText=max-ent;
             document.getElementById('updateValorRecebidoLabel').innerText=formatRealJS(valRecAtu);
             document.getElementById('updateValorPendenteLabel').innerText=formatRealJS(Math.max(0, (max*parseFloat(pr||0))-valRecAtu));
