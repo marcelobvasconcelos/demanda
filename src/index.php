@@ -231,11 +231,14 @@ if ($firestoreEnabled) {
 
             $dataStr = $r['data_cadastro'] ?? $r['data'] ?? null;
             $anoItem = $dataStr ? substr($dataStr, 0, 4) : 'Outros';
-            if (!isset($statsPorAno[$anoItem])) $statsPorAno[$anoItem] = ['total' => 0, 'recebido' => 0];
+            if (!isset($statsPorAno[$anoItem])) $statsPorAno[$anoItem] = ['total' => 0, 'recebido' => 0, 'pecas_total' => 0, 'pecas_entregues' => 0];
             $statsPorAno[$anoItem]['total'] += $val;
             $statsPorAno[$anoItem]['recebido'] += $rec;
+            $statsPorAno[$anoItem]['pecas_total'] += $qT;
+            $statsPorAno[$anoItem]['pecas_entregues'] += $qE;
         }
         $statsRemessas['valor_pendente'] = max(0, $statsRemessas['valor_total'] - $statsRemessas['valor_recebido']);
+        $statsRemessas['pecas_faltam'] = max(0, $statsRemessas['pecas_totais'] - $statsRemessas['pecas_entregues']);
         krsort($statsPorAno);
 
         // Pendente dos últimos 6 meses (sem novas chamadas ao Firebase, usa cache)
@@ -246,18 +249,20 @@ if ($firestoreEnabled) {
             $dt = new DateTime('first day of -' . $i . ' month');
             $prefix = ($mesesNomes[$dt->format('m')] ?? '') . '-' . $dt->format('Y');
             $label = ucfirst($mesesNomes[$dt->format('m')] ?? '') . '/' . $dt->format('Y');
-            $totalMes = 0.0; $recMes = 0.0;
+            $totalMes = 0.0; $recMes = 0.0; $pecasTotalMes = 0; $pecasEntreguesMes = 0;
             foreach ($allRemessas as $r) {
                 if (strpos($r['__collection'] ?? '', $prefix) === 0) {
                     $qT = intval($r['quantidade'] ?? $r['qtd'] ?? 0);
                     $prU = floatval($r['preco_unitario'] ?? $r['precoU'] ?? 0);
                     $totalMes += floatval($r['total'] ?? ($qT * $prU));
                     $recMes += floatval($r['valor_recebido'] ?? 0);
+                    $pecasTotalMes += $qT;
+                    $pecasEntreguesMes += intval($r['qtd_entregue'] ?? $r['entregue'] ?? 0);
                 }
             }
             $pendMes = max(0, $totalMes - $recMes);
             $pendente6Meses += $pendMes;
-            if ($totalMes > 0) $pendente6MesesPorMes[] = ['label' => $label, 'pendente' => $pendMes, 'total' => $totalMes];
+            if ($totalMes > 0) $pendente6MesesPorMes[] = ['label' => $label, 'pendente' => $pendMes, 'total' => $totalMes, 'pecas_faltam' => max(0, $pecasTotalMes - $pecasEntreguesMes)];
         }
     } catch (Throwable $e) { $msgError = 'Erro: ' . $e->getMessage(); }
 }
@@ -391,8 +396,8 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
         <?php endif; ?>
 
         <?php if ($activeTab === 'remessas'): ?>
-            <!-- Dashboard de Resumo Responsivo -->
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10">
+            <!-- Cards de Resumo: 4 colunas quando há peças faltando -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
                 <div class="bg-indigo-600 p-6 rounded-[2.5rem] text-white shadow-2xl shadow-indigo-100 relative overflow-hidden">
                     <i data-lucide="trending-up" class="absolute -right-6 -bottom-6 w-32 h-32 opacity-10"></i>
                     <span class="text-[10px] font-black uppercase tracking-widest opacity-70 block mb-1">Faturamento Bruto</span>
@@ -406,6 +411,12 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
                 <div class="bg-white border-2 border-rose-100 p-6 rounded-[2.5rem] shadow-xl shadow-rose-50/50 relative overflow-hidden">
                     <span class="text-[10px] font-black uppercase tracking-widest text-rose-400 block mb-1">Saldo Pendente</span>
                     <div class="text-3xl font-black text-rose-500"><?php echo formatReal($statsRemessas['valor_pendente']); ?></div>
+                </div>
+                <div class="bg-white border-2 border-violet-100 p-6 rounded-[2.5rem] shadow-xl shadow-violet-50/50 relative overflow-hidden">
+                    <i data-lucide="scissors" class="absolute -right-4 -bottom-4 w-24 h-24 opacity-5"></i>
+                    <span class="text-[10px] font-black uppercase tracking-widest text-violet-400 block mb-1">Peças a Produzir</span>
+                    <div class="text-3xl font-black text-violet-600"><?php echo $statsRemessas['pecas_faltam']; ?></div>
+                    <div class="text-[9px] font-bold text-slate-400 mt-1"><?php echo $statsRemessas['pecas_entregues']; ?> / <?php echo $statsRemessas['pecas_totais']; ?> entregues</div>
                 </div>
             </div>
 
@@ -607,7 +618,10 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
                             <?php foreach ($pendente6MesesPorMes as $pm): ?>
                                 <div class="bg-white/10 rounded-2xl px-4 py-3">
                                     <span class="text-[9px] font-black uppercase opacity-60 block mb-0.5"><?php echo $pm['label']; ?></span>
-                                    <span class="text-sm font-black"><?php echo formatReal($pm['pendente']); ?></span>
+                                    <span class="text-sm font-black block"><?php echo formatReal($pm['pendente']); ?></span>
+                                    <?php if ($pm['pecas_faltam'] > 0): ?>
+                                        <span class="text-[9px] font-bold opacity-70 mt-0.5 block"><?php echo $pm['pecas_faltam']; ?> peça<?php echo $pm['pecas_faltam'] > 1 ? 's' : ''; ?> a produzir</span>
+                                    <?php endif; ?>
                                 </div>
                             <?php endforeach; ?>
                         </div>
@@ -644,6 +658,7 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
                             <?php foreach ($statsPorAno as $ano => $s): 
                                 $aPend = max(0, $s['total'] - $s['recebido']);
                                 $pPer = $s['total'] > 0 ? round(($s['recebido'] / $s['total']) * 100) : 0;
+                                $pecasFaltamAno = max(0, ($s['pecas_total'] ?? 0) - ($s['pecas_entregues'] ?? 0));
                             ?>
                                 <div class="bg-slate-50/50 rounded-3xl p-6 border border-slate-100 hover:border-indigo-200 transition-all group">
                                     <div class="flex justify-between items-center mb-4">
@@ -653,7 +668,7 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
                                     <div class="w-full bg-slate-200 h-3 rounded-full overflow-hidden mb-4">
                                         <div class="h-full bg-emerald-500 rounded-full transition-all duration-1000" style="width: <?php echo $pPer; ?>%"></div>
                                     </div>
-                                    <div class="flex justify-between text-[11px] font-black uppercase tracking-tight">
+                                    <div class="flex justify-between text-[11px] font-black uppercase tracking-tight mb-3">
                                         <div class="flex items-center gap-1.5 text-emerald-600">
                                             <div class="w-2 h-2 rounded-full bg-emerald-500"></div> PAGO: <?php echo formatReal($s['recebido']); ?>
                                         </div>
@@ -661,6 +676,22 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
                                             FALTA: <?php echo formatReal($aPend); ?> <div class="w-2 h-2 rounded-full bg-rose-500"></div>
                                         </div>
                                     </div>
+                                    <?php if (($s['pecas_total'] ?? 0) > 0): ?>
+                                    <div class="flex items-center justify-between bg-violet-50 rounded-2xl px-4 py-2.5 border border-violet-100">
+                                        <div class="flex items-center gap-2 text-violet-600">
+                                            <i data-lucide="scissors" class="w-3.5 h-3.5"></i>
+                                            <span class="text-[10px] font-black uppercase">Produção</span>
+                                        </div>
+                                        <div class="text-right">
+                                            <?php if ($pecasFaltamAno > 0): ?>
+                                                <span class="text-[11px] font-black text-violet-700"><?php echo $pecasFaltamAno; ?> peça<?php echo $pecasFaltamAno > 1 ? 's' : ''; ?> a produzir</span>
+                                            <?php else: ?>
+                                                <span class="text-[11px] font-black text-emerald-600">Tudo entregue ✓</span>
+                                            <?php endif; ?>
+                                            <span class="text-[9px] font-bold text-slate-400 block"><?php echo $s['pecas_entregues'] ?? 0; ?>/<?php echo $s['pecas_total'] ?? 0; ?> peças</span>
+                                        </div>
+                                    </div>
+                                    <?php endif; ?>
                                 </div>
                             <?php endforeach; ?>
                         </div>
