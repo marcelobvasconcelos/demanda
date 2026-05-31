@@ -79,6 +79,64 @@ CREATE TABLE IF NOT EXISTS `remessas` (
     CONSTRAINT `fk_remessas_loja` FOREIGN KEY (`loja_id`) REFERENCES `lojas` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ==========================================
+-- MÓDULO: ATELIÊ SOB MEDIDA (100% MySQL)
+-- ==========================================
+
+-- 7a. Clientes do ateliê com medidas em JSON
+CREATE TABLE IF NOT EXISTS `atelie_clientes` (
+    `id`          INT AUTO_INCREMENT PRIMARY KEY,
+    `nome`        VARCHAR(255) NOT NULL,
+    `telefone`    VARCHAR(20)  DEFAULT NULL,
+    `medidas_json` JSON        DEFAULT NULL COMMENT 'busto, cintura, quadril, comprimento, ombro, obs...',
+    `criado_em`   TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 7b. Catálogo de serviços com preço base
+CREATE TABLE IF NOT EXISTS `atelie_servicos_catalogo` (
+    `id`            INT AUTO_INCREMENT PRIMARY KEY,
+    `nome_servico`  VARCHAR(255)   NOT NULL,
+    `preco_base`    DECIMAL(10,2)  NOT NULL DEFAULT 0.00
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 7c. Pedidos avulsos
+CREATE TABLE IF NOT EXISTS `atelie_pedidos` (
+    `id`               INT AUTO_INCREMENT PRIMARY KEY,
+    `cliente_id`       INT            NOT NULL,
+    `valor_total`      DECIMAL(10,2)  NOT NULL DEFAULT 0.00,
+    `valor_pago`       DECIMAL(10,2)  NOT NULL DEFAULT 0.00,
+    `status_entrega`   ENUM('Pendente','Em Produção','Entregue') NOT NULL DEFAULT 'Pendente',
+    `status_pagamento` ENUM('Pendente','Parcial','Pago')         NOT NULL DEFAULT 'Pendente',
+    `observacoes`      TEXT           DEFAULT NULL,
+    `data_pedido`      DATE           NOT NULL,
+    CONSTRAINT `fk_atelie_pedido_cliente`
+        FOREIGN KEY (`cliente_id`) REFERENCES `atelie_clientes` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 7d. Itens de cada pedido
+CREATE TABLE IF NOT EXISTS `atelie_itens_pedido` (
+    `id`             INT AUTO_INCREMENT PRIMARY KEY,
+    `pedido_id`      INT           NOT NULL,
+    `servico_id`     INT           NOT NULL,
+    `quantidade`     INT           NOT NULL DEFAULT 1,
+    `preco_aplicado` DECIMAL(10,2) NOT NULL,
+    CONSTRAINT `fk_atelie_item_pedido`
+        FOREIGN KEY (`pedido_id`)  REFERENCES `atelie_pedidos` (`id`) ON DELETE CASCADE,
+    CONSTRAINT `fk_atelie_item_servico`
+        FOREIGN KEY (`servico_id`) REFERENCES `atelie_servicos_catalogo` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Dados iniciais do catálogo
+INSERT INTO `atelie_servicos_catalogo` (`nome_servico`, `preco_base`) VALUES
+('Ajuste de Barra', 25.00),
+('Ajuste de Cós', 30.00),
+('Troca de Zíper', 35.00),
+('Ajuste de Ombros', 45.00),
+('Confecção de Vestido', 350.00),
+('Confecção de Blusa', 120.00),
+('Confecção de Calça', 180.00),
+('Ajuste Geral', 80.00);
+
 -- 7. Tabela de Lotes — espelho do Firestore com controle de sincronismo
 -- O campo `id` usa o próprio ID do documento Firestore como chave primária,
 -- garantindo que INSERT ... ON DUPLICATE KEY UPDATE nunca crie duplicatas.

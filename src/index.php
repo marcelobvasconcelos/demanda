@@ -359,6 +359,9 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
             <nav class="hidden md:flex items-center gap-1 bg-slate-100/80 p-1 rounded-2xl border border-slate-200">
                 <a href="?tab=remessas" class="px-6 py-2 rounded-xl text-sm font-extrabold transition-all <?php echo $activeTab==='remessas'?'bg-white text-indigo-600 shadow-md shadow-indigo-50':'text-slate-500 hover:text-slate-800'; ?>">Remessas</a>
                 <a href="?tab=dashboard" class="px-6 py-2 rounded-xl text-sm font-extrabold transition-all <?php echo $activeTab==='dashboard'?'bg-white text-indigo-600 shadow-md shadow-indigo-50':'text-slate-500 hover:text-slate-800'; ?>">Dashboard</a>
+                <a href="atelie_sob_medida.php" class="px-6 py-2 rounded-xl text-sm font-extrabold transition-all text-purple-600 hover:bg-purple-50 flex items-center gap-2">
+                    <i data-lucide="ruler" class="w-4 h-4"></i> Ateliê
+                </a>
             </nav>
 
             <div class="flex items-center gap-2 md:gap-4">
@@ -738,6 +741,10 @@ function getMesNome($m) { $mn = ['01'=>'janeiro','02'=>'fevereiro','03'=>'março
         <a href="?tab=dashboard" class="flex flex-col items-center gap-1 relative <?php echo $activeTab==='dashboard'?'tab-active':'text-slate-400'; ?>">
             <i data-lucide="layout-grid" class="w-6 h-6"></i>
             <span class="text-[10px] font-black uppercase tracking-tighter">Dashboard</span>
+        </a>
+        <a href="atelie_sob_medida.php" class="flex flex-col items-center gap-1 relative text-purple-600">
+            <i data-lucide="ruler" class="w-6 h-6"></i>
+            <span class="text-[10px] font-black uppercase tracking-tighter">Ateliê</span>
         </a>
     </nav>
 
