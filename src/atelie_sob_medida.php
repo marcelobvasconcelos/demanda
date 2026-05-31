@@ -16,7 +16,7 @@ require_once __DIR__ . '/controllers/AtelieController.php';
 try {
     $dsn = sprintf(
         'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
-        getenv('DB_HOST') ?: 'mysql',
+        getenv('DB_HOST') ?: 'db',
         getenv('DB_PORT') ?: '3306',
         getenv('DB_DATABASE') ?: 'costureira_db'
     );
@@ -25,7 +25,7 @@ try {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
     ]);
 } catch (PDOException $e) {
-    die('Erro de conexão: ' . $e->getMessage());
+    die('Erro de conexão MySQL: ' . $e->getMessage() . '<br><br><a href="index.php" style="color: #6366f1; font-weight: bold;">← Voltar ao sistema principal</a>');
 }
 
 $controller = new AtelieController($pdo);

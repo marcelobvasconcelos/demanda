@@ -30,7 +30,7 @@ $connectionError = '';
 $pdo = null;
 
 try {
-    $db_host = getenv('DB_HOST') ?: 'mysql';
+    $db_host = getenv('DB_HOST') ?: 'db';
     $db_port = getenv('DB_PORT') ?: '3306';
     $db_name = getenv('DB_DATABASE') ?: 'costureira_db';
     $db_user = getenv('DB_USERNAME') ?: 'costureira_user';
