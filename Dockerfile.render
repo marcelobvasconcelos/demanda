@@ -1,0 +1,116 @@
+FROM php:8.2-apache
+
+# Instalar dependências
+RUN apt-get update && apt-get install -y \
+    libzip-dev \
+    zip \
+    unzip \
+    git \
+    curl \
+    libpng-dev \
+    libonig-dev \
+    libxml2-dev \
+    default-mysql-server \
+    supervisor \
+    && docker-php-ext-install pdo_mysql mysqli zip \
+    && a2enmod rewrite
+
+# Configurar Apache
+ENV APACHE_DOCUMENT_ROOT=/var/www/html
+RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf
+RUN sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf
+
+# Copiar código
+COPY ./src /var/www/html/
+COPY ./docker/mysql/init.sql /docker-entrypoint-initdb.d/init.sql
+
+# Configurar permissões
+RUN chown -R www-data:www-data /var/www/html \
+    && chmod -R 755 /var/www/html
+
+# Criar diretórios necessários
+RUN mkdir -p /var/www/html/tmp /var/www/html/logs \
+    && chown -R www-data:www-data /var/www/html/tmp /var/www/html/logs
+
+# Configurar MySQL
+RUN mkdir -p /var/run/mysqld \
+    && chown -R mysql:mysql /var/run/mysqld /var/lib/mysql
+
+# Configurar Supervisor para rodar MySQL e Apache juntos
+RUN mkdir -p /var/log/supervisor
+COPY <<EOF /etc/supervisor/conf.d/supervisord.conf
+[supervisord]
+nodaemon=true
+user=root
+
+[program:mysql]
+command=/usr/bin/mysqld_safe
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/mysql.log
+stderr_logfile=/var/log/supervisor/mysql_err.log
+
+[program:apache]
+command=/usr/sbin/apache2ctl -D FOREGROUND
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/apache.log
+stderr_logfile=/var/log/supervisor/apache_err.log
+EOF
+
+# Script de inicialização
+COPY <<'EOF' /usr/local/bin/docker-entrypoint.sh
+#!/bin/bash
+set -e
+
+# Inicializar MySQL se necessário
+if [ ! -d "/var/lib/mysql/mysql" ]; then
+    echo "Inicializando MySQL..."
+    mysqld --initialize-insecure --user=mysql --datadir=/var/lib/mysql
+fi
+
+# Iniciar MySQL temporariamente para criar banco
+mysqld --user=mysql --datadir=/var/lib/mysql &
+MYSQL_PID=$!
+
+# Aguardar MySQL iniciar
+echo "Aguardando MySQL iniciar..."
+for i in {30..0}; do
+    if mysqladmin ping &>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+
+if [ "$i" = 0 ]; then
+    echo "MySQL não iniciou a tempo"
+    exit 1
+fi
+
+# Criar banco e usuário
+mysql -u root <<-EOSQL
+    CREATE DATABASE IF NOT EXISTS costureira_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE USER IF NOT EXISTS 'costureira_user'@'%' IDENTIFIED BY 'costureira_pass';
+    GRANT ALL PRIVILEGES ON costureira_db.* TO 'costureira_user'@'%';
+    FLUSH PRIVILEGES;
+EOSQL
+
+# Importar schema
+if [ -f /docker-entrypoint-initdb.d/init.sql ]; then
+    echo "Importando schema..."
+    mysql -u root costureira_db < /docker-entrypoint-initdb.d/init.sql
+fi
+
+# Parar MySQL temporário
+mysqladmin -u root shutdown
+wait $MYSQL_PID
+
+# Iniciar Supervisor (que vai rodar MySQL e Apache)
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+EOF
+
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+EXPOSE 80
+
+CMD ["/usr/local/bin/docker-entrypoint.sh"]

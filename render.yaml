@@ -3,12 +3,12 @@ services:
     name: demanda
     runtime: docker
     plan: free
-    dockerfilePath: ./docker/php/Dockerfile
+    dockerfilePath: ./Dockerfile.render
     dockerContext: .
     autoDeploy: true
     envVars:
       - key: DB_HOST
-        value: db
+        value: localhost
       - key: DB_PORT
         value: 3306
       - key: DB_DATABASE
