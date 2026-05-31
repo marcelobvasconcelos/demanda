@@ -3,21 +3,19 @@ services:
     name: demanda
     runtime: docker
     plan: free
-    dockerfilePath: ./Dockerfile.render
+    dockerfilePath: ./docker/php/Dockerfile
     dockerContext: .
     autoDeploy: true
     envVars:
-      - key: DB_HOST
-        value: localhost
-      - key: DB_PORT
-        value: 3306
-      - key: DB_DATABASE
-        value: costureira_db
-      - key: DB_USERNAME
-        value: costureira_user
-      - key: DB_PASSWORD
-        value: costureira_pass
-      - key: DOCKER_ENV
-        value: true
       - key: GOOGLE_APPLICATION_CREDENTIALS
         value: /etc/secrets/firebase_credenciais.json
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_DATABASE
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
