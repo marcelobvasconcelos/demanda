@@ -2,6 +2,7 @@ firebase_credenciais.json
 src/firebase_credenciais.json
 src/logs/
 src/tmp/
+src/data/
 src/vendor/
 .qodo/
 .env

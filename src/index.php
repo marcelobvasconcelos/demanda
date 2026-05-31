@@ -30,7 +30,10 @@ $connectionError = '';
 $pdo = null;
 
 try {
-    $db_host = getenv('DB_HOST') ?: 'db';
+    // Detecta automaticamente se está no Docker ou local
+    $defaultHost = (getenv('DOCKER_ENV') === 'true' || file_exists('/.dockerenv')) ? 'db' : 'localhost';
+    
+    $db_host = getenv('DB_HOST') ?: $defaultHost;
     $db_port = getenv('DB_PORT') ?: '3306';
     $db_name = getenv('DB_DATABASE') ?: 'costureira_db';
     $db_user = getenv('DB_USERNAME') ?: 'costureira_user';
