@@ -55,6 +55,14 @@ Campos financeiros (`valor_recebido`, `qtd_entregue`, etc.) são adicionados aos
 ### Cache
 Os dados do Firestore são armazenados em cache local (arquivo JSON em `/tmp`) por 10 minutos, evitando excesso de requisições e estourar a cota gratuita do Firebase.
 
+### Dados Locais (CSV)
+O sistema também mantém um espelho local dos dados em arquivos CSV na pasta `data/`:
+- `lotes.csv` - Lotes de produção
+- `lojas.csv` - Lojas/parceiras
+- `clientes.csv` - Clientes
+
+Isso permite funcionamento offline parcial e reduz chamadas ao Firestore.
+
 ---
 
 ## Estrutura de arquivos relevantes
@@ -64,8 +72,14 @@ src/
 ├── index.php                  # Aplicação principal (login, dashboard, remessas)
 ├── login_screen.php           # Tela de login (HTML)
 ├── firebase_helper.php        # Integração com Firestore e Firebase Auth via REST
-├── sync_firestore_on_start.php # Sincronização Firestore → MySQL local
+├── csv_helper.php             # Armazenamento local em CSV
+├── sync_firestore_on_start.php # Sincronização Firestore → CSV local
 └── firebase_credenciais.json  # Credenciais da service account (não versionado)
+
+data/                          # Dados locais (CSV) - persistidos no Render
+├── lotes.csv
+├── lojas.csv
+└── clientes.csv
 ```
 
 ---
@@ -76,7 +90,3 @@ src/
 |---|---|
 | `GOOGLE_APPLICATION_CREDENTIALS` | Caminho para o arquivo de credenciais JSON |
 | `FIREBASE_CREDENTIALS_JSON` | Conteúdo JSON das credenciais (alternativa ao arquivo) |
-| `DB_HOST` | Host do MySQL |
-| `DB_DATABASE` | Nome do banco de dados |
-| `DB_USERNAME` | Usuário do banco |
-| `DB_PASSWORD` | Senha do banco |

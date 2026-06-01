@@ -1,9 +1,25 @@
-.git
-.qodo
-firebase_credenciais.json
-src/firebase_credenciais.json
-src/logs
-src/tmp
-src/vendor
-*.log
+# Dados locais (CSV) - não copiar para o container
+data/
+tmp/
+logs/
 
+# Credenciais
+firebase_credenciais.json
+*.json
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Docker
+docker/
+Dockerfile*
+docker-compose*
+
+# Documentação
+*.md
+!README.md

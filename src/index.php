@@ -7,7 +7,7 @@
 session_start();
 
 require __DIR__ . '/firebase_helper.php';
-require __DIR__ . '/sync_firestore_on_start.php';
+require __DIR__ . '/csv_helper.php';
 
 $firestoreEnabled = false;
 $firestoreStatusMessage = '';
@@ -24,37 +24,9 @@ if (function_exists('curl_init') && function_exists('openssl_sign')) {
     $firestoreStatusMessage = 'Firestore não disponível: lib cURL ou OpenSSL ausente.';
 }
 
-// Conexão MySQL (Opcional, usado para Dashboard e Sincronização)
-$dbConnected = false;
-$connectionError = '';
-$pdo = null;
-
-try {
-    // Detecta automaticamente se está no Docker ou local
-    $defaultHost = (getenv('DOCKER_ENV') === 'true' || file_exists('/.dockerenv')) ? 'db' : 'localhost';
-    
-    $db_host = getenv('DB_HOST') ?: $defaultHost;
-    $db_port = getenv('DB_PORT') ?: '3306';
-    $db_name = getenv('DB_DATABASE') ?: 'costureira_db';
-    $db_user = getenv('DB_USERNAME') ?: 'costureira_user';
-    $db_pass = getenv('DB_PASSWORD') ?: 'costureira_pass';
-    
-    $dsn = "mysql:host={$db_host};port={$db_port};dbname={$db_name};charset=utf8mb4";
-    $pdo = new PDO($dsn, $db_user, $db_pass, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_TIMEOUT => 3
-    ]);
-    $dbConnected = true;
-} catch (Throwable $e) {
-    $connectionError = $e->getMessage();
-}
-
-// Lojas para select
-$lojas = [];
-if ($dbConnected && $pdo) {
-    $lojas = $pdo->query("SELECT id, nome FROM lojas ORDER BY nome ASC")->fetchAll();
-}
+// Dados locais (CSV) - Fallback do Firestore
+csv_init();
+$lojas = csv_get_lojas();
 
 // Lógica de Abas e Filtros (Atualizado com correções de campos)
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'remessas';
@@ -280,30 +252,19 @@ if ($firestoreEnabled) {
 $syncContingencia = false; // true = cota esgotada, exibindo espelho local
 
 // 2. Fila de pendentes: lotes gravados offline aguardando envio ao Firebase
-$syncPendentesNaFila = 0;
-if ($dbConnected && $pdo) {
-    try {
-        $syncPendentesNaFila = (int) $pdo
-            ->query('SELECT COUNT(*) FROM lotes WHERE sincronizado = 0')
-            ->fetchColumn();
-    } catch (Throwable) {}
-}
+$syncPendentesNaFila = csv_count_pendentes();
 
 // 3. Carimbo do último sync: usa o mtime do arquivo de cache JSON como referência.
-//    Se o cache não existir, tenta pegar o atualizado_em mais recente do MySQL.
+//    Se o cache não existir, tenta pegar o atualizado_em mais recente do CSV.
 $syncUltimaVerificacao = null;
 $cacheFileRef = __DIR__ . '/tmp/dashboard_cache_' . md5($_SESSION['usuario_email'] ?? '') . '.json';
 if (file_exists($cacheFileRef)) {
     $syncUltimaVerificacao = date('d/m/Y \à\s H:i', filemtime($cacheFileRef));
-} elseif ($dbConnected && $pdo) {
-    try {
-        $tsRow = $pdo
-            ->query('SELECT MAX(atualizado_em) FROM lotes WHERE sincronizado = 1')
-            ->fetchColumn();
-        if ($tsRow) {
-            $syncUltimaVerificacao = (new DateTime($tsRow))->format('d/m/Y \à\s H:i');
-        }
-    } catch (Throwable) {}
+} else {
+    $tsRow = csv_get_last_updated();
+    if ($tsRow) {
+        $syncUltimaVerificacao = (new DateTime($tsRow))->format('d/m/Y \à\s H:i');
+    }
 }
 
 function formatReal($val) { return 'R$ ' . number_format($val, 2, ',', '.'); }
