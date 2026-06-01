@@ -429,14 +429,6 @@ try { $credentials = firestore_get_credentials(); } catch (Throwable $e) { $cred
 // SINCRONISMO LOCAL (CSV) — Failover + Fila de Escrita
 // =============================================================================
 
-function firestore_is_quota_error(string $message): bool
-{
-    return stripos($message, 'quota') !== false
-        || stripos($message, 'RESOURCE_EXHAUSTED') !== false
-        || stripos($message, '429') !== false
-        || stripos($message, 'rateLimitExceeded') !== false;
-}
-
 function csv_espelhar_lotes(array $lotes, string $mesAnoRef): void
 {
     foreach ($lotes as $r) {
@@ -500,13 +492,9 @@ function csv_salvar_lote(string $docId, array $dados, string $colecao, bool $con
 }
 
 // =============================================================================
-// SINCRONISMO LOCAL (MySQL) — Failover + Fila de Escrita
+// SINCRONISMO LOCAL (CSV) — Failover + Fila de Escrita
 // =============================================================================
 
-/**
- * Verifica se um erro do Firestore é causado por cota esgotada.
- * Cobre HTTP 429 (Too Many Requests) e 403 com mensagem de quota.
- */
 function firestore_is_quota_error(string $message): bool
 {
     return stripos($message, 'quota') !== false
