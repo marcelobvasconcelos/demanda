@@ -1,7 +1,7 @@
 <?php
 /**
  * Módulo Ateliê Sob Medida
- * 100% MySQL - Não interage com Firebase
+ * 100% CSV - Não usa MySQL nem Firebase
  */
 session_start();
 
@@ -12,40 +12,7 @@ if (!isset($_SESSION['usuario_email'])) {
 
 require_once __DIR__ . '/controllers/AtelieController.php';
 
-// Conexão MySQL
-try {
-    // Detecta automaticamente se está no Docker ou local
-    $defaultHost = (getenv('DOCKER_ENV') === 'true' || file_exists('/.dockerenv')) ? 'db' : 'localhost';
-    
-    $dsn = sprintf(
-        'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
-        getenv('DB_HOST') ?: $defaultHost,
-        getenv('DB_PORT') ?: '3306',
-        getenv('DB_DATABASE') ?: 'costureira_db'
-    );
-    $pdo = new PDO($dsn, getenv('DB_USERNAME') ?: 'costureira_user', getenv('DB_PASSWORD') ?: 'costureira_pass', [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_TIMEOUT => 5
-    ]);
-} catch (PDOException $e) {
-    $errorMsg = '<div style="font-family: sans-serif; max-width: 600px; margin: 50px auto; padding: 30px; background: #fee; border-radius: 10px; border: 2px solid #fcc;">';
-    $errorMsg .= '<h2 style="color: #c00; margin-top: 0;">⚠️ Erro de Conexão MySQL</h2>';
-    $errorMsg .= '<p><strong>Mensagem:</strong> ' . htmlspecialchars($e->getMessage()) . '</p>';
-    $errorMsg .= '<hr style="border: 1px solid #fcc; margin: 20px 0;">';
-    $errorMsg .= '<h3>Possíveis causas:</h3>';
-    $errorMsg .= '<ol>';
-    $errorMsg .= '<li><strong>MySQL não está rodando</strong> - Verifique se o serviço MySQL está ativo</li>';
-    $errorMsg .= '<li><strong>Credenciais incorretas</strong> - Verifique as variáveis de ambiente DB_HOST, DB_USERNAME, DB_PASSWORD</li>';
-    $errorMsg .= '<li><strong>Banco não existe</strong> - Execute o script <code>docker/mysql/init.sql</code></li>';
-    $errorMsg .= '<li><strong>No Render</strong> - Configure um serviço MySQL separado (veja RENDER_MYSQL_SETUP.md)</li>';
-    $errorMsg .= '</ol>';
-    $errorMsg .= '<p style="margin-top: 30px;"><a href="index.php" style="color: #6366f1; font-weight: bold; text-decoration: none;">← Voltar ao sistema principal</a></p>';
-    $errorMsg .= '</div>';
-    die($errorMsg);
-}
-
-$controller = new AtelieController($pdo);
+$controller = new AtelieController();
 $msgSuccess = $msgError = '';
 $activeView = $_GET['view'] ?? 'pedidos';
 
